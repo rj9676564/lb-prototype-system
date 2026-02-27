@@ -5,23 +5,55 @@ on:
     tags:
       - 'b*.*.*'
 
+env:
+  REGISTRY: ghcr.io
+
 jobs:
-  build-backend:
+  build-and-push-image:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Setup Go 并开启缓存支持，大幅提高预编译阶段速度
+      # 保留 Go 预编译以测试代码正确性
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.22'
           cache: true
-          # 显式指定 go.sum 路径加速缓存键的寻找
           cache-dependency-path: './backend/go.sum'
 
-      # 构建二进制文件
-      - name: Build backend
+      - name: Build backend (Sanity check)
         working-directory: ./backend
         run: go build -v -o app
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lower case image name
+        run: echo "IMAGE_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')-backend" >> $GITHUB_ENV
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=match,pattern=b(.*),group=1
+            type=sha
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./backend
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
