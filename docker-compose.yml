@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  backend:
+    image: ghcr.io/rj9676564/lb-prototype-system-backend:latest
+    container_name: prototype-backend
+    restart: unless-stopped
+    ports:
+      - "9000:9000"
+    volumes:
+      - ./pb_data:/app/pb_data # PocketBase 数据持久化目录
+
+  frontend:
+    image: ghcr.io/rj9676564/lb-prototype-system-frontend:latest
+    container_name: prototype-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
