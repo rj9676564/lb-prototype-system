@@ -1,30 +1,49 @@
-# Logs
+# OS metadata
+.DS_Store
+*.swp
+*~
 
-logs
-_.log
-npm-debug.log_
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
+# IDE & Editor files
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
 
-node_modules
-dist
-dist-ssr
-*.local
+# Node / Frontend
+node_modules/
+dist/
+dist-ssr/
+build/
+.npm
+.pnpm-store
 
 # Environment variables
 .env
 .env.local
+.env.development.local
+.env.test.local
+.env.production.local
 
-# Editor directories and files
+# Go / Backend
+backend/app
+backend/app.exe
+*.exe
+*.test
+*.prof
 
-.vscode/_
-!.vscode/extensions.json
-.idea
-.DS_Store
-_.suo
-_.ntvs_
-_.njsproj
-_.sln
-\*.sw?
+# PocketBase data
+pb_data/
+
+# Logs
+logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Framework/Language specific
+.eslintcache
+.stylelintcache
+coverage/
+.nyc_output/

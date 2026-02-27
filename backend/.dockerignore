@@ -1,0 +1,11 @@
+.git
+pb_data
+*test*
+*.go
+!main.go
+!diff.go
+Dockerfile
+.dockerignore
+vendor/
+node_modules/
+.DS_Store

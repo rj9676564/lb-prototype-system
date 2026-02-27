@@ -1,0 +1,27 @@
+name: Backend CI/CD
+
+on:
+  push:
+    tags:
+      - 'b*.*.*'
+
+jobs:
+  build-backend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Setup Go 并开启缓存支持，大幅提高预编译阶段速度
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+          cache: true
+          # 显式指定 go.sum 路径加速缓存键的寻找
+          cache-dependency-path: './backend/go.sum'
+
+      # 构建二进制文件
+      - name: Build backend
+        working-directory: ./backend
+        run: go build -v -o app
