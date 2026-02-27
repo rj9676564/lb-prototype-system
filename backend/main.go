@@ -7,10 +7,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/apis" // 新增 apis 导入
 	"github.com/pocketbase/pocketbase/core"
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 func main() {
@@ -239,7 +241,7 @@ func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 	return app.Save(currentRecord)
 }
 
-// 解压函数保持不变
+// 解压函数：增加对 GBK 等非 UTF-8 编码文件名的支持，解决 macOS 下中文文件名的 illegal byte sequence 错误
 func unzip(src string, dest string) error {
 	r, err := zip.OpenReader(src)
 	if err != nil {
@@ -248,7 +250,10 @@ func unzip(src string, dest string) error {
 	defer r.Close()
 
 	for _, f := range r.File {
-		fpath := filepath.Join(dest, f.Name)
+		// --- 💡 核心修复：处理中文乱码或非法字节序列 ---
+		fileName := decodeZipName(f.Name)
+		fpath := filepath.Join(dest, fileName)
+		
 		if f.FileInfo().IsDir() {
 			os.MkdirAll(fpath, os.ModePerm)
 			continue
@@ -273,4 +278,19 @@ func unzip(src string, dest string) error {
 		}
 	}
 	return nil
+}
+
+// 尝试将非 UTF-8 的 zip 文件名转为 UTF-8 (应对 Windows 默认打包的 GBK 中文名)
+func decodeZipName(name string) string {
+	if utf8.ValidString(name) {
+		return name
+	}
+	// 如果不是合法的 UTF-8，尝试用 GB18030 / GBK 进行解码
+	decoder := simplifiedchinese.GB18030.NewDecoder()
+	decoded, err := decoder.String(name)
+	if err == nil {
+		return decoded
+	}
+	// 解析失败则返回原本的值
+	return name
 }
