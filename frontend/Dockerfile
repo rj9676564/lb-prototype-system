@@ -1,9 +1,6 @@
-# Multi-arch friendly frontend image based on official Node.
-FROM node:20-alpine AS base
+FROM --platform=$BUILDPLATFORM node:20-alpine AS builder
 
 WORKDIR /app
-
-FROM base as deps
 
 COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* .npmrc* ./
 
@@ -14,28 +11,17 @@ RUN \
   else echo "Lockfile not found." && exit 1; \
   fi
 
-FROM base as builder
-
-ENV NODE_ENV production
+ENV NODE_ENV=production
 ARG VITE_BACKEND_BASE_URL
 ENV VITE_BACKEND_BASE_URL=${VITE_BACKEND_BASE_URL}
-
-COPY --from=deps /app/node_modules ./node_modules
 
 COPY . .
 
 RUN npm run build
 
-FROM base as runner
+FROM --platform=$TARGETPLATFORM nginx:1.27-alpine AS runner
 
-ENV NODE_ENV production
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder /app/dist /usr/share/nginx/html
 
-RUN npm install -g serve
-
-COPY --from=builder /app/dist ./
-
-EXPOSE 3000
-
-USER node
-
-CMD ["serve", "-s", ".", "-l", "3000"]
+EXPOSE 80
