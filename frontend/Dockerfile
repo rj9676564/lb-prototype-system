@@ -1,7 +1,7 @@
-# This Dockerfile uses `serve` npm package to serve the static files with node process.
-# You can find the Dockerfile for nginx in the following link:
-# https://github.com/refinedev/dockerfiles/blob/main/vite/Dockerfile.nginx
-FROM refinedev/node:18 AS base
+# Multi-arch friendly frontend image based on official Node.
+FROM node:20-alpine AS base
+
+WORKDIR /app
 
 FROM base as deps
 
@@ -10,7 +10,7 @@ COPY package.json yarn.lock* package-lock.json* pnpm-lock.yaml* .npmrc* ./
 RUN \
   if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
   elif [ -f package-lock.json ]; then npm ci; \
-  elif [ -f pnpm-lock.yaml ]; then yarn global add pnpm@9 && pnpm i --frozen-lockfile; \
+  elif [ -f pnpm-lock.yaml ]; then npm install -g pnpm@9 && pnpm install --frozen-lockfile; \
   else echo "Lockfile not found." && exit 1; \
   fi
 
@@ -20,7 +20,7 @@ ENV NODE_ENV production
 ARG VITE_BACKEND_BASE_URL
 ENV VITE_BACKEND_BASE_URL=${VITE_BACKEND_BASE_URL}
 
-COPY --from=deps /app/refine/node_modules ./node_modules
+COPY --from=deps /app/node_modules ./node_modules
 
 COPY . .
 
@@ -32,8 +32,10 @@ ENV NODE_ENV production
 
 RUN npm install -g serve
 
-COPY --from=builder /app/refine/dist ./
+COPY --from=builder /app/dist ./
 
-USER refine
+EXPOSE 3000
 
-CMD ["serve"]
+USER node
+
+CMD ["serve", "-s", ".", "-l", "3000"]
