@@ -2,19 +2,32 @@ version: '3.8'
 
 services:
   backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
     image: ghcr.io/rj9676564/lb-prototype-system-backend:latest
     container_name: prototype-backend
     restart: unless-stopped
     ports:
-      - "9000:9000"
+      - "${BACKEND_PORT:-9000}:9000"
+    environment:
+      DEFAULT_ADMIN_EMAIL: ${DEFAULT_ADMIN_EMAIL:-admin@example.com}
+      DEFAULT_ADMIN_PASSWORD: ${DEFAULT_ADMIN_PASSWORD:-12345678}
+      PROTOTYPE_SOURCE_DIR: /app/source-prototypes
     volumes:
-      - ./pb_data:/app/pb_data # PocketBase 数据持久化目录
+      - ${PB_DATA_DIR:-./pb_data}:/app/pb_data # PocketBase 数据持久化目录
+      - ${HOST_PROTOTYPE_SOURCE_DIR:-/Users/laibin/Documents/shopkeeper}:/app/source-prototypes:ro
 
   frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_BACKEND_BASE_URL: ${VITE_BACKEND_BASE_URL:-http://127.0.0.1:9000}
     image: ghcr.io/rj9676564/lb-prototype-system-frontend:latest
     container_name: prototype-frontend
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${FRONTEND_PORT:-3000}:3000"
     depends_on:
       - backend

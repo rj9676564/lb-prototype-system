@@ -17,6 +17,8 @@ RUN \
 FROM base as builder
 
 ENV NODE_ENV production
+ARG VITE_BACKEND_BASE_URL
+ENV VITE_BACKEND_BASE_URL=${VITE_BACKEND_BASE_URL}
 
 COPY --from=deps /app/refine/node_modules ./node_modules
 

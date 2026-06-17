@@ -2,54 +2,120 @@ package main
 
 import (
 	"archive/zip"
+	"encoding/json"
+	"errors"
 	"io"
+	"io/fs"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"unicode/utf8"
 
+	_ "awesomeProject/migrations"
 	"github.com/pocketbase/pocketbase"
-	"github.com/pocketbase/pocketbase/apis" // 新增 apis 导入
+	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/plugins/migratecmd"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
+
+const (
+	autoVersionTitle = "当前版本"
+	autoSourcePrefix = "[AUTO_SOURCE]"
+	mappingFileName = "prototype_scan_mapping.json"
+	defaultCreatorEmail = "admin@example.com"
+)
+
+type scanMapping struct {
+	Projects map[string]string `json:"projects"`
+	Versions map[string]string `json:"versions"`
+}
+
+type syncSummary struct {
+	ScannedProjects int      `json:"scanned_projects"`
+	CreatedProjects int      `json:"created_projects"`
+	UpdatedProjects int      `json:"updated_projects"`
+	CreatedVersions int      `json:"created_versions"`
+	UpdatedVersions int      `json:"updated_versions"`
+	SkippedPaths    []string `json:"skipped_paths"`
+}
+
+var errSourceDirNotConfigured = errors.New("未配置 PROTOTYPE_SOURCE_DIR，无法扫描原型目录")
 
 func main() {
 	app := pocketbase.New()
 
-	// 添加静态文件服务：将 pb_public 下的文件挂载到 URL 根目录下
+	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{
+		Automigrate: true,
+		Dir:         "migrations",
+	})
+
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		staticHandler := apis.Static(os.DirFS("./pb_public"), false)
+		sourceDir := strings.TrimSpace(os.Getenv("PROTOTYPE_SOURCE_DIR"))
 
-		// 注册一个通用的静态文件处理路由，并在此移除 X-Frame-Options
+		if sourceDir != "" {
+			se.Router.GET("/linked-projects/{path...}", func(e *core.RequestEvent) error {
+				if err := ensureSafeLinkedProjectPath(e.Request.PathValue(apis.StaticWildcardParam)); err != nil {
+					return e.BadRequestError("非法的预览路径", err)
+				}
+
+				e.Response.Header().Del("X-Frame-Options")
+				e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
+
+				return apis.Static(os.DirFS(sourceDir), false)(e)
+			})
+		}
+
+		se.Router.POST("/api/prototype-sync/scan", func(e *core.RequestEvent) error {
+			if e.Auth == nil {
+				return e.UnauthorizedError("需要登录后才能执行扫描。", nil)
+			}
+
+			creatorID, err := resolveCreatorID(e.App, e.Auth)
+			if err != nil {
+				return e.InternalServerError("无法确定默认创建人", err)
+			}
+
+			summary, err := syncPrototypeDirectories(e.App, creatorID)
+			if err != nil {
+				if errors.Is(err, errSourceDirNotConfigured) {
+					return e.BadRequestError(err.Error(), nil)
+				}
+				log.Println("扫描原型目录失败:", err)
+				return e.InternalServerError("扫描原型目录失败", err)
+			}
+
+			return e.JSON(http.StatusOK, summary)
+		}).Bind(apis.RequireAuth())
+
 		se.Router.GET("/{path...}", func(e *core.RequestEvent) error {
-			// 移除 X-Frame-Options 以允许 iframe 嵌入
 			e.Response.Header().Del("X-Frame-Options")
-			// 也增加 CSP 支持（如果是为了现代浏览器）
 			e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
-			
+
 			return staticHandler(e)
 		})
 		return se.Next()
 	})
 
-	// 为确保无论是新建还是修改都能被捕获到，我们同时监听 Create 和 Update
 	hookFunc := func(e *core.RecordEvent) error {
-		// 为了排查你的表名是不是填错了，我们先把所有的表都打印出来
 		log.Printf("===> 捕获到表 [%s] 的变动事件", e.Record.Collection().Name)
 
-		// 如果不是我们期望的表，就直接跳过
 		if e.Record.Collection().Name != "rp_prototype" {
 			return nil
 		}
 
-		// --- 💡 防死循环拦截 ---
 		if e.Record.GetBool("skip_diff_hook") {
-			// 一旦识别到是我们后台重新塞进去保存的，立刻返回，不要走后面的解压缩和差异对比了
-			// 并且马上清理掉这个标记，免得后续别人正当修改的时候也不生效
 			e.Record.Set("skip_diff_hook", false)
 			log.Println("------ [防死循环] 拦截到系统后台更新 Diff 的保存，已直接跳过 ------")
+			return nil
+		}
+
+		if isAutoPrototypeRecord(e.Record) {
+			log.Println("------ 自动同步目录版本，跳过 ZIP 解压与 Diff 计算 ------")
 			return nil
 		}
 
@@ -66,26 +132,22 @@ func main() {
 			return nil
 		}
 
-		// 1. 获取文件路径
 		dataDir := e.App.DataDir()
 		collectionId := e.Record.Collection().Id
 		recordId := e.Record.Id
 		zipPath := filepath.Join(dataDir, "storage", collectionId, recordId, fileField)
 		log.Println("目标 ZIP 路径:", zipPath)
 
-		// 检查ZIP是否存在
 		if _, err := os.Stat(zipPath); os.IsNotExist(err) {
 			log.Println("错误：找不到 ZIP 文件路径 ->", zipPath)
 			return nil
 		}
 
-		// 2. 设定解压目标 (pb_public/projects/ID)
 		destDir := filepath.Join("pb_public", "projects", recordId)
 
 		os.MkdirAll(destDir, os.ModePerm)
 		log.Println("准备解压到文件夹:", destDir)
 
-		// 4. 执行解压 (保留在主线程，确保用户收到回复时文件已经就绪)
 		if err := unzip(zipPath, destDir); err != nil {
 			log.Println("解压失败:", err)
 			return nil
@@ -107,11 +169,9 @@ func main() {
 			foundIndexPath = "/projects/" + recordId + "/index.html"
 		}
 
-		// 为了防止 e.App.Save 触发无限循环，我们要判断 url 是否有修改
-		// 如果修改了，我们使用带 skip 标记的方式保存
 		if e.Record.GetString("url") != foundIndexPath {
 			e.Record.Set("url", foundIndexPath)
-			e.Record.Set("skip_diff_hook", true) // 告诉下面的触发钩子这次不要管
+			e.Record.Set("skip_diff_hook", true)
 			if err := e.App.Save(e.Record); err != nil {
 				log.Println("更新 url 字段失败:", err)
 			} else {
@@ -119,8 +179,6 @@ func main() {
 			}
 		}
 
-		// --- 💡 核心改进：执行异步处理 ---
-		// 开启一个后台协程处理耗时的 Diff 计算，不阻塞当前的 HTTP 返回
 		go func(app core.App, record *core.Record) {
 			log.Println("[后台任务] 开始异步处理流程...")
 			if err := recalculateDiffForRecord(app, record); err != nil {
@@ -130,13 +188,12 @@ func main() {
 			}
 		}(e.App, e.Record)
 
-		return nil // 钩子执行完毕，立即释放线程，用户端会立即看到“保存成功”
+		return nil
 	}
 
 	app.OnRecordAfterCreateSuccess().BindFunc(hookFunc)
 	app.OnRecordAfterUpdateSuccess().BindFunc(hookFunc)
 
-	// --- 💡 核心新增：监听记录删除事件，清理文件夹并链式更新后续记录 ---
 	app.OnRecordAfterDeleteSuccess().BindFunc(func(e *core.RecordEvent) error {
 		if e.Record.Collection().Name != "rp_prototype" {
 			return nil
@@ -145,7 +202,6 @@ func main() {
 		projectId := e.Record.GetString("project")
 		recordId := e.Record.Id
 
-		// 1. 物理删除已删记录的文件目录
 		os.RemoveAll(filepath.Join("pb_public", "projects", recordId))
 		log.Printf("已清理被删除记录 (%s) 的文件夹", recordId)
 
@@ -153,12 +209,10 @@ func main() {
 			return nil
 		}
 
-		// 2. 查找是否有下一个受影响的版本 (C)
-		// 条件：同项目，且创建时间在这条刚刚删除的记录之后的第一条新记录
 		nextRecords, err := e.App.FindRecordsByFilter(
 			"rp_prototype",
 			"project = {:project} && id != {:id} && created > {:created}",
-			"+created", // 按时间升序，取紧接着的下一个
+			"+created",
 			1,
 			0,
 			map[string]any{
@@ -171,7 +225,6 @@ func main() {
 		if err == nil && len(nextRecords) > 0 {
 			nextRecord := nextRecords[0]
 			log.Printf("检测到版本 B(%s) 被删除，开始为下个版本 C(%s) 重新计算差异...", recordId, nextRecord.Id)
-			// 异步触发下一个版本的差异重算计算 (由于是在别的线程，不阻塞删除流程)
 			go func(app core.App, record *core.Record) {
 				if err := recalculateDiffForRecord(app, record); err != nil {
 					log.Println("重新计算 Diff 失败:", err)
@@ -239,6 +292,296 @@ func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 	// 在钩子上半部分拦截它，这样存入 diff 后就不会再次触发 Diff 计算了。
 	currentRecord.Set("skip_diff_hook", true)
 	return app.Save(currentRecord)
+}
+
+func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, error) {
+	sourceDir := strings.TrimSpace(os.Getenv("PROTOTYPE_SOURCE_DIR"))
+	if sourceDir == "" {
+		return nil, errSourceDirNotConfigured
+	}
+
+	absSourceDir, err := filepath.Abs(sourceDir)
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := os.Stat(absSourceDir)
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, errors.New("PROTOTYPE_SOURCE_DIR 不是目录")
+	}
+
+	paths, skipped, err := discoverPrototypePaths(absSourceDir)
+	if err != nil {
+		return nil, err
+	}
+
+	mapping, err := loadScanMapping(app)
+	if err != nil {
+		return nil, err
+	}
+
+	projectCollection, err := app.FindCollectionByNameOrId("rp_project")
+	if err != nil {
+		return nil, err
+	}
+
+	prototypeCollection, err := app.FindCollectionByNameOrId("rp_prototype")
+	if err != nil {
+		return nil, err
+	}
+
+	summary := &syncSummary{
+		ScannedProjects: len(paths),
+		SkippedPaths:    skipped,
+	}
+
+	for _, relPath := range paths {
+		displayName := filepath.Base(relPath)
+		projectRecord, createdProject, err := ensureProjectRecord(app, projectCollection, mapping, relPath, displayName, creatorID)
+		if err != nil {
+			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": "+err.Error())
+			continue
+		}
+		if createdProject {
+			summary.CreatedProjects++
+		} else {
+			summary.UpdatedProjects++
+		}
+
+		_, createdVersion, err := ensurePrototypeRecord(app, prototypeCollection, mapping, relPath, projectRecord, creatorID)
+		if err != nil {
+			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": "+err.Error())
+			continue
+		}
+		if createdVersion {
+			summary.CreatedVersions++
+		} else {
+			summary.UpdatedVersions++
+		}
+	}
+
+	if err := saveScanMapping(app, mapping); err != nil {
+		return nil, err
+	}
+
+	sort.Strings(summary.SkippedPaths)
+
+	return summary, nil
+}
+
+func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
+	entries, err := os.ReadDir(sourceDir)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var paths []string
+	var skipped []string
+
+	for _, entry := range entries {
+		if !entry.IsDir() || isHiddenName(entry.Name()) {
+			continue
+		}
+
+		topLevelPath := entry.Name()
+		topLevelAbs := filepath.Join(sourceDir, topLevelPath)
+		hasIndex, err := containsIndexHTML(topLevelAbs)
+		if err != nil {
+			skipped = append(skipped, topLevelPath+": "+err.Error())
+			continue
+		}
+		if hasIndex {
+			paths = append(paths, topLevelPath)
+			continue
+		}
+
+		childEntries, err := os.ReadDir(topLevelAbs)
+		if err != nil {
+			skipped = append(skipped, topLevelPath+": "+err.Error())
+			continue
+		}
+
+		for _, child := range childEntries {
+			if !child.IsDir() || isHiddenName(child.Name()) {
+				continue
+			}
+
+			childPath := filepath.Join(topLevelPath, child.Name())
+			childAbs := filepath.Join(sourceDir, childPath)
+			hasIndex, err := containsIndexHTML(childAbs)
+			if err != nil {
+				skipped = append(skipped, childPath+": "+err.Error())
+				continue
+			}
+			if hasIndex {
+				paths = append(paths, filepath.ToSlash(childPath))
+			}
+		}
+	}
+
+	sort.Strings(paths)
+	return paths, skipped, nil
+}
+
+func ensureProjectRecord(app core.App, collection *core.Collection, mapping *scanMapping, relPath string, displayName string, creatorID string) (*core.Record, bool, error) {
+	if id := mapping.Projects[relPath]; id != "" {
+		record, err := app.FindFirstRecordByFilter(collection, "id = {:id}", map[string]any{"id": id})
+		if err == nil {
+			applyProjectFields(record, relPath, displayName, creatorID)
+			return record, false, app.Save(record)
+		}
+	}
+
+	record := core.NewRecord(collection)
+	applyProjectFields(record, relPath, displayName, creatorID)
+	if err := app.Save(record); err != nil {
+		return nil, false, err
+	}
+
+	mapping.Projects[relPath] = record.Id
+	return record, true, nil
+}
+
+func ensurePrototypeRecord(app core.App, collection *core.Collection, mapping *scanMapping, relPath string, projectRecord *core.Record, creatorID string) (*core.Record, bool, error) {
+	if id := mapping.Versions[relPath]; id != "" {
+		record, err := app.FindFirstRecordByFilter(collection, "id = {:id}", map[string]any{"id": id})
+		if err == nil {
+			applyPrototypeFields(record, relPath, projectRecord.Id, creatorID)
+			return record, false, app.Save(record)
+		}
+	}
+
+	record := core.NewRecord(collection)
+	applyPrototypeFields(record, relPath, projectRecord.Id, creatorID)
+	if err := app.Save(record); err != nil {
+		return nil, false, err
+	}
+
+	mapping.Versions[relPath] = record.Id
+	return record, true, nil
+}
+
+func applyProjectFields(record *core.Record, relPath string, displayName string, creatorID string) {
+	setFieldIfExists(record, "name", displayName)
+	setFieldIfExists(record, "description", autoDescription(relPath))
+	setFieldIfExists(record, "creator", creatorID)
+}
+
+func applyPrototypeFields(record *core.Record, relPath string, projectID string, creatorID string) {
+	setFieldIfExists(record, "project", projectID)
+	setFieldIfExists(record, "title", autoVersionTitle)
+	setFieldIfExists(record, "remark", autoDescription(relPath))
+	setFieldIfExists(record, "status", "approved")
+	setFieldIfExists(record, "url", "/linked-projects/"+filepath.ToSlash(relPath)+"/index.html")
+	setFieldIfExists(record, "creator", creatorID)
+	setFieldIfExists(record, "skip_diff_hook", true)
+}
+
+func autoDescription(relPath string) string {
+	return autoSourcePrefix + " " + filepath.ToSlash(relPath)
+}
+
+func isAutoPrototypeRecord(record *core.Record) bool {
+	return strings.HasPrefix(record.GetString("remark"), autoSourcePrefix)
+}
+
+func setFieldIfExists(record *core.Record, name string, value any) {
+	if record.Collection().Fields.GetByName(name) != nil {
+		record.Set(name, value)
+	}
+}
+
+func containsIndexHTML(dir string) (bool, error) {
+	info, err := os.Stat(filepath.Join(dir, "index.html"))
+	if err == nil {
+		return !info.IsDir(), nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
+func isHiddenName(name string) bool {
+	return strings.HasPrefix(name, ".")
+}
+
+func ensureSafeLinkedProjectPath(path string) error {
+	cleaned := filepath.ToSlash(filepath.Clean(strings.TrimPrefix(path, "/")))
+	if cleaned == "." || cleaned == "" {
+		return nil
+	}
+	if strings.HasPrefix(cleaned, "../") || cleaned == ".." {
+		return errors.New("path traversal is not allowed")
+	}
+	return nil
+}
+
+func loadScanMapping(app core.App) (*scanMapping, error) {
+	path := filepath.Join(app.DataDir(), mappingFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &scanMapping{
+				Projects: map[string]string{},
+				Versions: map[string]string{},
+			}, nil
+		}
+		return nil, err
+	}
+
+	var mapping scanMapping
+	if err := json.Unmarshal(data, &mapping); err != nil {
+		return nil, err
+	}
+
+	if mapping.Projects == nil {
+		mapping.Projects = map[string]string{}
+	}
+	if mapping.Versions == nil {
+		mapping.Versions = map[string]string{}
+	}
+
+	return &mapping, nil
+}
+
+func saveScanMapping(app core.App, mapping *scanMapping) error {
+	data, err := json.MarshalIndent(mapping, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(app.DataDir(), os.ModePerm); err != nil {
+		return err
+	}
+
+	return os.WriteFile(filepath.Join(app.DataDir(), mappingFileName), data, 0o644)
+}
+
+func resolveCreatorID(app core.App, authRecord *core.Record) (string, error) {
+	if authRecord != nil && authRecord.Collection().Name == "users" {
+		return authRecord.Id, nil
+	}
+
+	email := strings.TrimSpace(os.Getenv("DEFAULT_ADMIN_EMAIL"))
+	if email == "" {
+		email = defaultCreatorEmail
+	}
+
+	usersCollection, err := app.FindCollectionByNameOrId("users")
+	if err != nil {
+		return "", err
+	}
+
+	user, err := app.FindAuthRecordByEmail(usersCollection, email)
+	if err != nil {
+		return "", err
+	}
+
+	return user.Id, nil
 }
 
 // 解压函数：增加对 GBK 等非 UTF-8 编码文件名的支持，解决 macOS 下中文文件名的 illegal byte sequence 错误

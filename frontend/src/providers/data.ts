@@ -35,7 +35,7 @@ export const dataProvider: DataProvider = {
         if (filter.field === 'q') {
           // Special search keyword
           if (resource === "rp_project") {
-             filterStrings.push(`(name ~ "${val}" || creator.email ~ "${val}")`);
+             filterStrings.push(`(name ~ "${val}" || description ~ "${val}" || creator.email ~ "${val}")`);
           } else {
              filterStrings.push(`(title ~ "${val}")`);
           }

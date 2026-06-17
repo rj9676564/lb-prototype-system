@@ -7,15 +7,18 @@ import {
   DeleteButton,
   DateField,
 } from "@refinedev/antd";
-import { Table, Space, Avatar, Button, Form, Input } from "antd";
-import { EyeOutlined, SearchOutlined } from "@ant-design/icons";
+import { Table, Space, Avatar, Button, Form, Input, message } from "antd";
+import { EyeOutlined, SearchOutlined, SyncOutlined } from "@ant-design/icons";
 import { useMany, useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router";
+import { pb } from "../../lib/pocketbase";
 import { API_URL } from "../../providers/constants";
 
 export const ProjectList = () => {
   const { data: user } = useGetIdentity<any>();
   const navigate = useNavigate();
+  const [messageApi, contextHolder] = message.useMessage();
+  const [syncing, setSyncing] = React.useState(false);
 
   const { tableProps, searchFormProps } = useTable({
     syncWithLocation: true,
@@ -48,14 +51,44 @@ export const ProjectList = () => {
   const userData = userQuery.data;
   const userIsLoading = userQuery.isLoading;
 
+  const handleScanImport = async () => {
+    setSyncing(true);
+    try {
+      const response = await fetch(`${API_URL}/prototype-sync/scan`, {
+        method: "POST",
+        headers: {
+          Authorization: pb.authStore.token ? `Bearer ${pb.authStore.token}` : "",
+        },
+      });
+
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(result?.message || result?.data?.message || "扫描导入失败");
+      }
+
+      await messageApi.success(
+        `扫描完成：扫描 ${result.scanned_projects ?? 0} 个项目，新增项目 ${result.created_projects ?? 0} 个，更新项目 ${result.updated_projects ?? 0} 个。`,
+      );
+      window.location.reload();
+    } catch (error: any) {
+      messageApi.error(error?.message || "扫描导入失败");
+    } finally {
+      setSyncing(false);
+    }
+  };
+
   return (
     <List>
+      {contextHolder}
       <Form {...searchFormProps} layout="inline" style={{ marginBottom: "1rem" }}>
         <Form.Item name="keyword">
-          <Input placeholder="检索资源 项目名称/创建人邮箱" prefix={<SearchOutlined />} style={{ width: 300 }} />
+          <Input placeholder="检索项目名称/项目描述/创建人邮箱" prefix={<SearchOutlined />} style={{ width: 300 }} />
         </Form.Item>
         <Button type="primary" htmlType="submit">
           搜索
+        </Button>
+        <Button icon={<SyncOutlined />} loading={syncing} onClick={handleScanImport}>
+          扫描导入
         </Button>
       </Form>
       <Table {...tableProps} rowKey="id">

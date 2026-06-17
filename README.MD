@@ -34,6 +34,12 @@ pnpm run dev
 ```
 
 前端服务默认在本地端口（通常是 `http://localhost:5173`）启动。
+如需指定后端地址，可在启动前设置 `VITE_BACKEND_BASE_URL`，例如：
+
+```bash
+cd frontend
+VITE_BACKEND_BASE_URL=http://127.0.0.1:9000 pnpm run dev
+```
 
 ### 后端开发
 
@@ -45,6 +51,75 @@ go run main.go
 # 或
 go build -o app
 ```
+
+正式运行时支持以下环境变量：
+
+```bash
+DEFAULT_ADMIN_EMAIL=admin@example.com
+DEFAULT_ADMIN_PASSWORD=12345678
+PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper
+```
+
+上面这组变量适用于直接运行二进制。
+
+示例：
+
+```bash
+cd backend
+DEFAULT_ADMIN_EMAIL=admin@example.com \
+DEFAULT_ADMIN_PASSWORD=12345678 \
+PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper \
+./my-pb serve --http=127.0.0.1:9000 --dir=./pb_data
+```
+
+## 正式打包与部署
+
+- 后端运行时读取：
+  - `DEFAULT_ADMIN_EMAIL`
+  - `DEFAULT_ADMIN_PASSWORD`
+  - `PROTOTYPE_SOURCE_DIR`
+- 前端构建时读取：
+  - `VITE_BACKEND_BASE_URL`
+
+如果使用 Docker Compose，可以直接使用当前 shell 环境变量执行：
+
+```bash
+DEFAULT_ADMIN_EMAIL=admin@example.com \
+DEFAULT_ADMIN_PASSWORD=12345678 \
+HOST_PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper \
+PB_DATA_DIR=./pb_data \
+BACKEND_PORT=9000 \
+FRONTEND_PORT=3000 \
+VITE_BACKEND_BASE_URL=http://127.0.0.1:9000 \
+docker compose up --build -d
+```
+
+说明：
+
+- `backend` 会在容器运行时读取 `DEFAULT_ADMIN_EMAIL`、`DEFAULT_ADMIN_PASSWORD`、`PROTOTYPE_SOURCE_DIR`
+- `frontend` 会在镜像构建时读取 `VITE_BACKEND_BASE_URL`
+- 如果修改了 `VITE_BACKEND_BASE_URL`，需要重新构建前端镜像，即再次执行 `docker compose up --build -d`
+- `docker-compose.yml` 中不会直接使用宿主机目录作为 `PROTOTYPE_SOURCE_DIR`
+- 正确做法是把宿主机原型目录通过 `HOST_PROTOTYPE_SOURCE_DIR` 挂载到容器内 `/app/source-prototypes`
+- 容器内实际生效的扫描目录固定为 `/app/source-prototypes`
+
+环境变量示例：
+
+```bash
+DEFAULT_ADMIN_EMAIL=admin@example.com
+DEFAULT_ADMIN_PASSWORD=12345678
+HOST_PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper
+PB_DATA_DIR=./pb_data
+BACKEND_PORT=9000
+FRONTEND_PORT=3000
+VITE_BACKEND_BASE_URL=http://127.0.0.1:9000
+```
+
+其中：
+
+- 直接运行后端二进制时，使用 `PROTOTYPE_SOURCE_DIR`
+- 使用 `docker compose` 时，配置的是宿主机目录 `HOST_PROTOTYPE_SOURCE_DIR`
+- Compose 会把它挂载到容器内固定路径 `/app/source-prototypes`，再由后端通过 `PROTOTYPE_SOURCE_DIR=/app/source-prototypes` 读取
 
 ## CI/CD 自动化部署
 
