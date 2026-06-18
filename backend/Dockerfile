@@ -1,43 +1,45 @@
-# Build stage
-FROM golang:1.25-alpine AS builder
+FROM --platform=$BUILDPLATFORM node:20-alpine AS frontend-builder
 
-# Install build dependencies
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/yarn.lock* frontend/package-lock.json* frontend/pnpm-lock.yaml* frontend/.npmrc* ./
+
+RUN \
+  if [ -f yarn.lock ]; then yarn --frozen-lockfile; \
+  elif [ -f package-lock.json ]; then npm ci; \
+  elif [ -f pnpm-lock.yaml ]; then npm install -g pnpm@9 && pnpm install --frozen-lockfile; \
+  else echo "Lockfile not found." && exit 1; \
+  fi
+
+COPY frontend/ ./
+
+RUN npm run build
+
+FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend-builder
+
 RUN apk add --no-cache git gcc musl-dev
 
-WORKDIR /app
+WORKDIR /backend
 
-# Copy dependency files
-COPY go.mod go.sum ./
+COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 
-# Copy source code
-COPY . .
+COPY backend/ ./
 
-# Build the application
-# CGO_ENABLED=0 ensures a static binary for smaller/safer images
-RUN CGO_ENABLED=0 go build -o my-pb .
+RUN CGO_ENABLED=0 go build -o /app/my-pb .
 
-# Final stage
 FROM alpine:latest
 
-# Install runtime dependencies
 RUN apk add --no-cache ca-certificates tzdata bash
 
 WORKDIR /app
 
-# Copy the binary from builder
-COPY --from=builder /app/my-pb /app/my-pb
+COPY --from=backend-builder /app/my-pb /app/my-pb
+COPY backend/pb_public /app/pb_public
+COPY --from=frontend-builder /frontend/dist/. /app/pb_public/
 
-# Copy static files directory
-# Note: Ensure pb_public exists in your context
-COPY pb_public /app/pb_public
+RUN mkdir -p /app/pb_data /app/pb_public/projects
 
-# Create data directory for PocketBase persistence
-RUN mkdir -p /app/pb_data
-
-# Expose the port used in the application
 EXPOSE 9000
 
-# Set entrypoint to run the server
-# Default to 0.0.0.0 so it's accessible from outside the container
 ENTRYPOINT ["/app/my-pb", "serve", "--http=0.0.0.0:9000", "--dir=/app/pb_data"]

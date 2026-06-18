@@ -97,6 +97,11 @@ func main() {
 			e.Response.Header().Del("X-Frame-Options")
 			e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
 
+			if shouldServeSPAIndex(e.Request.PathValue(apis.StaticWildcardParam)) {
+				http.ServeFile(e.Response, e.Request, filepath.Join("pb_public", "index.html"))
+				return nil
+			}
+
 			return staticHandler(e)
 		})
 		return se.Next()
@@ -627,6 +632,24 @@ func ensureSafeLinkedProjectPath(path string) error {
 		return errors.New("path traversal is not allowed")
 	}
 	return nil
+}
+
+func shouldServeSPAIndex(requestPath string) bool {
+	cleaned := filepath.ToSlash(filepath.Clean(strings.TrimPrefix(requestPath, "/")))
+	if cleaned == "." || cleaned == "" {
+		return true
+	}
+
+	if strings.HasPrefix(cleaned, "projects/") {
+		return false
+	}
+
+	fullPath := filepath.Join("pb_public", filepath.FromSlash(cleaned))
+	if info, err := os.Stat(fullPath); err == nil {
+		return info.IsDir()
+	}
+
+	return filepath.Ext(cleaned) == ""
 }
 
 func loadScanMapping(app core.App) (*scanMapping, error) {

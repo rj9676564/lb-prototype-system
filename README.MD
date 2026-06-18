@@ -1,6 +1,6 @@
 # 原型管理系统 (Prototype System)
 
-这是一个分为前端（React + Refine + Ant Design）和后端（基于 PocketBase 等构建的 Go 服务）的全栈项目，提供项目原型的版本管理、预览和下载等功能。
+这是一个前后端分离开发、单容器部署的全栈项目，提供项目原型的版本管理、预览和下载等功能。
 
 ## 项目结构
 
@@ -13,11 +13,10 @@
 │   └── ...
 ├── backend/              # 后端代码目录
 │   ├── main.go           # Go 主程序入口
-│   ├── Dockerfile        # 容器化部署配置
+│   ├── Dockerfile        # 单容器部署镜像（包含前端构建产物）
 │   ├── pb_data/          # 数据库文件目录（如存在）
 │   └── ...
 └── .github/workflows/    # CI/CD 自动化构建配置
-    ├── frontend.yml      # 前端 GitHub Actions
     └── backend.yml       # 后端 GitHub Actions
 ```
 
@@ -34,6 +33,7 @@ pnpm run dev
 ```
 
 前端服务默认在本地端口（通常是 `http://localhost:5173`）启动。
+开发模式下前端默认请求同主机的 `9000` 端口后端。
 如需指定后端地址，可在启动前设置 `VITE_BACKEND_BASE_URL`，例如：
 
 ```bash
@@ -74,12 +74,10 @@ PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper \
 
 ## 正式打包与部署
 
-- 后端运行时读取：
+- 单容器运行时读取：
   - `DEFAULT_ADMIN_EMAIL`
   - `DEFAULT_ADMIN_PASSWORD`
   - `PROTOTYPE_SOURCE_DIR`
-- 前端构建时读取：
-  - `VITE_BACKEND_BASE_URL`
 
 如果使用 Docker Compose，可以直接使用当前 shell 环境变量执行：
 
@@ -88,17 +86,18 @@ DEFAULT_ADMIN_EMAIL=admin@example.com \
 DEFAULT_ADMIN_PASSWORD=12345678 \
 HOST_PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper \
 PB_DATA_DIR=./pb_data \
-BACKEND_PORT=9000 \
-FRONTEND_PORT=3000 \
-VITE_BACKEND_BASE_URL=http://127.0.0.1:9000 \
+APP_PORT=9000 \
 docker compose up --build -d
 ```
 
 说明：
 
-- `backend` 会在容器运行时读取 `DEFAULT_ADMIN_EMAIL`、`DEFAULT_ADMIN_PASSWORD`、`PROTOTYPE_SOURCE_DIR`
-- `frontend` 会在镜像构建时读取 `VITE_BACKEND_BASE_URL`
-- 如果修改了 `VITE_BACKEND_BASE_URL`，需要重新构建前端镜像，即再次执行 `docker compose up --build -d`
+- `app` 是唯一需要部署的容器
+- 容器内同时承载：
+  - PocketBase API
+  - 前端静态资源
+  - 原型预览静态资源
+- 生产环境前端默认走同源访问，即浏览器直接请求当前站点的 `/api/...`
 - `docker-compose.yml` 中不会直接使用宿主机目录作为 `PROTOTYPE_SOURCE_DIR`
 - 正确做法是把宿主机原型目录通过 `HOST_PROTOTYPE_SOURCE_DIR` 挂载到容器内 `/app/source-prototypes`
 - 容器内实际生效的扫描目录固定为 `/app/source-prototypes`
@@ -110,9 +109,7 @@ DEFAULT_ADMIN_EMAIL=admin@example.com
 DEFAULT_ADMIN_PASSWORD=12345678
 HOST_PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper
 PB_DATA_DIR=./pb_data
-BACKEND_PORT=9000
-FRONTEND_PORT=3000
-VITE_BACKEND_BASE_URL=http://127.0.0.1:9000
+APP_PORT=9000
 ```
 
 其中：
@@ -120,24 +117,20 @@ VITE_BACKEND_BASE_URL=http://127.0.0.1:9000
 - 直接运行后端二进制时，使用 `PROTOTYPE_SOURCE_DIR`
 - 使用 `docker compose` 时，配置的是宿主机目录 `HOST_PROTOTYPE_SOURCE_DIR`
 - Compose 会把它挂载到容器内固定路径 `/app/source-prototypes`，再由后端通过 `PROTOTYPE_SOURCE_DIR=/app/source-prototypes` 读取
+- 生产部署时外部只需要关心一个访问入口，例如 `http://your-host:9000`
 
 ## CI/CD 自动化部署
 
-本项目使用 GitHub Actions 进行自动化构建。构建任务被分离为前端和后端两部分，通过在推送时打上特定的 Tag 触发对应的工作流。
+本项目使用 GitHub Actions 进行自动化构建。
+部署镜像统一由 `backend.yml` 构建，它会同时：
 
-### 触发前端构建
+- 构建前端静态资源
+- 构建后端二进制
+- 打包成单个运行镜像
 
-执行以下命令并推送到远程仓库，将自动启动 `frontend.yml` 中定义的依赖缓存和构建任务：
+### 触发部署镜像构建
 
-```bash
-# 构建对应的 tag 需要以 'f' 开头，如 f1.0.0
-git tag f1.0.0
-git push origin f1.0.0
-```
-
-### 触发后端构建
-
-执行以下命令并推送到远程仓库，将自动启动 `backend.yml` 中定义的 Go 编译和打包任务：
+执行以下命令并推送到远程仓库，将自动启动 `backend.yml` 中定义的镜像构建任务：
 
 ```bash
 # 构建对应的 tag 需要以 'b' 开头，如 b1.0.0
@@ -149,3 +142,4 @@ git push origin b1.0.0
 
 - **前端**: React, [@refinedev/core](https://refine.dev/), [@refinedev/antd](https://refine.dev/docs/ui-frameworks/antd/tutorial/), Ant Design, Vite
 - **后端**: Go, [PocketBase](https://pocketbase.io/)
+- **部署**: 单容器镜像，运行时由 PocketBase 提供 API 与静态页面
