@@ -46,7 +46,7 @@ func upgradeProjectCollection(app core.App) error {
 	addFieldIfMissing(collection, &core.FileField{
 		Name:      "cover",
 		MaxSelect: 1,
-		MimeTypes: []string{"image/jpeg", "image/png", "image/svg+xml", "image/gif", "image/webp"},
+		MimeTypes: []string{"image/jpeg", "image/png", "image/svg+xml", "image/svg", "image/gif", "image/webp", "text/xml", "text/plain", "application/octet-stream"},
 	})
 	addFieldIfMissing(collection, &core.RelationField{
 		Name:         "creator",

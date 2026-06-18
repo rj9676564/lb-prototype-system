@@ -118,7 +118,7 @@ func ensureProjectCollection(app core.App) error {
 		&core.FileField{
 			Name:      "cover",
 			MaxSelect: 1,
-			MimeTypes: []string{"image/jpeg", "image/png", "image/svg+xml", "image/gif", "image/webp"},
+			MimeTypes: []string{"image/jpeg", "image/png", "image/svg+xml", "image/svg", "image/gif", "image/webp", "text/xml", "text/plain", "application/octet-stream"},
 		},
 		&core.RelationField{
 			Name:         "creator",
