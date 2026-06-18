@@ -3,25 +3,35 @@ import {
   List,
   useTable,
   EditButton,
-  ShowButton,
   DeleteButton,
   DateField,
 } from "@refinedev/antd";
-import { Table, Space, Avatar, Button, Form, Input, message } from "antd";
-import { EyeOutlined, SearchOutlined, SyncOutlined } from "@ant-design/icons";
+import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex } from "antd";
+import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined } from "@ant-design/icons";
 import { useMany, useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router";
 import { pb } from "../../lib/pocketbase";
-import { API_URL } from "../../providers/constants";
+import { API_URL, BASE_URL } from "../../providers/constants";
+
+type LatestPrototypeMeta = {
+  title?: string;
+  url?: string;
+};
 
 export const ProjectList = () => {
   const { data: user } = useGetIdentity<any>();
   const navigate = useNavigate();
   const [messageApi, contextHolder] = message.useMessage();
   const [syncing, setSyncing] = React.useState(false);
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
+  const [drawerTitle, setDrawerTitle] = React.useState<string>("");
+  const [latestPrototypeMap, setLatestPrototypeMap] = React.useState<Record<string, LatestPrototypeMeta>>({});
 
   const { tableProps, searchFormProps } = useTable({
     syncWithLocation: true,
+    pagination: {
+      pageSize: 50,
+    },
     sorters: {
       initial: [
         {
@@ -51,6 +61,53 @@ export const ProjectList = () => {
   const userData = userQuery.data;
   const userIsLoading = userQuery.isLoading;
 
+  React.useEffect(() => {
+    const projectIds = tableProps?.dataSource?.map((item: any) => item?.id).filter(Boolean) ?? [];
+
+    if (projectIds.length === 0) {
+      setLatestPrototypeMap({});
+      return;
+    }
+
+    let cancelled = false;
+
+    const loadLatestPrototypes = async () => {
+      const entries = await Promise.all(
+        projectIds.map(async (projectId: string) => {
+          try {
+            const response = await pb.collection("rp_prototype").getList<any>(1, 1, {
+              filter: `project = "${projectId}"`,
+              sort: "-created",
+            });
+
+            const latest = response.items?.[0];
+            return [
+              projectId,
+              latest
+                ? {
+                    title: latest.title,
+                    url: latest.url,
+                  }
+                : {},
+            ] as const;
+          } catch {
+            return [projectId, {}] as const;
+          }
+        }),
+      );
+
+      if (!cancelled) {
+        setLatestPrototypeMap(Object.fromEntries(entries));
+      }
+    };
+
+    loadLatestPrototypes();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [tableProps?.dataSource]);
+
   const handleScanImport = async () => {
     setSyncing(true);
     try {
@@ -77,6 +134,12 @@ export const ProjectList = () => {
     }
   };
 
+  const openPreview = (url: string, title: string) => {
+    const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
+    setPreviewUrl(fullUrl);
+    setDrawerTitle(title);
+  };
+
   return (
     <List>
       {contextHolder}
@@ -84,12 +147,14 @@ export const ProjectList = () => {
         <Form.Item name="keyword">
           <Input placeholder="检索项目名称/项目描述/创建人邮箱" prefix={<SearchOutlined />} style={{ width: 300 }} />
         </Form.Item>
-        <Button type="primary" htmlType="submit">
-          搜索
-        </Button>
-        <Button icon={<SyncOutlined />} loading={syncing} onClick={handleScanImport}>
-          扫描导入
-        </Button>
+        <Flex gap="small">
+          <Button type="primary" htmlType="submit">
+            搜索
+          </Button>
+          <Button icon={<SyncOutlined />} loading={syncing} onClick={handleScanImport}>
+            扫描导入
+          </Button>
+        </Flex>
       </Form>
       <Table {...tableProps} rowKey="id">
         <Table.Column
@@ -125,15 +190,29 @@ export const ProjectList = () => {
           dataIndex="actions"
           render={(_, record: any) => {
             const isCreator = user?.id === record.creator;
+            const latestPrototype = latestPrototypeMap[record.id];
             return (
               <Space>
-                <Button 
-                  icon={<EyeOutlined />} 
-                  size="small" 
+                <Button
+                  icon={<EyeOutlined />}
+                  size="small"
                   onClick={() => navigate(`/rp_prototype?filters[0][field]=project&filters[0][operator]=eq&filters[0][value]=${record.id}`)}
                 >
                   查看版本
                 </Button>
+                <Tooltip title={latestPrototype?.url ? "预览最新版本" : "暂无可预览版本"}>
+                  <Button
+                    icon={<GlobalOutlined />}
+                    size="small"
+                    disabled={!latestPrototype?.url}
+                    onClick={() => {
+                      if (!latestPrototype?.url) return;
+                      openPreview(latestPrototype.url, `${record.name} - ${latestPrototype.title || "最新版本"}`);
+                    }}
+                  >
+                    预览最新
+                  </Button>
+                </Tooltip>
                 {isCreator && (
                   <>
                     <EditButton hideText size="small" recordItemId={record.id} />
@@ -145,6 +224,31 @@ export const ProjectList = () => {
           }}
         />
       </Table>
+
+      <Drawer
+        title={drawerTitle}
+        placement="right"
+        width="80%"
+        onClose={() => setPreviewUrl(null)}
+        open={!!previewUrl}
+        extra={
+          <Button
+            icon={<ExportOutlined />}
+            onClick={() => previewUrl && window.open(previewUrl, "_blank")}
+          >
+            新窗口打开
+          </Button>
+        }
+        styles={{ body: { padding: 0, overflow: "hidden" } }}
+      >
+        {previewUrl && (
+          <iframe
+            src={previewUrl}
+            title="Latest Prototype Preview"
+            style={{ width: "100%", height: "100%", border: "none" }}
+          />
+        )}
+      </Drawer>
     </List>
   );
 };

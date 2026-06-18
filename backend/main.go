@@ -19,6 +19,7 @@ import (
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
+	"github.com/pocketbase/pocketbase/tools/filesystem"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
@@ -340,7 +341,7 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 
 	for _, relPath := range paths {
 		displayName := filepath.Base(relPath)
-		projectRecord, createdProject, err := ensureProjectRecord(app, projectCollection, mapping, relPath, displayName, creatorID)
+		projectRecord, createdProject, err := ensureProjectRecord(app, projectCollection, mapping, absSourceDir, relPath, displayName, creatorID)
 		if err != nil {
 			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": "+err.Error())
 			continue
@@ -426,17 +427,17 @@ func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
 	return paths, skipped, nil
 }
 
-func ensureProjectRecord(app core.App, collection *core.Collection, mapping *scanMapping, relPath string, displayName string, creatorID string) (*core.Record, bool, error) {
+func ensureProjectRecord(app core.App, collection *core.Collection, mapping *scanMapping, sourceDir string, relPath string, displayName string, creatorID string) (*core.Record, bool, error) {
 	if id := mapping.Projects[relPath]; id != "" {
 		record, err := app.FindFirstRecordByFilter(collection, "id = {:id}", map[string]any{"id": id})
 		if err == nil {
-			applyProjectFields(record, relPath, displayName, creatorID)
+			applyProjectFields(record, sourceDir, relPath, displayName, creatorID)
 			return record, false, app.Save(record)
 		}
 	}
 
 	record := core.NewRecord(collection)
-	applyProjectFields(record, relPath, displayName, creatorID)
+	applyProjectFields(record, sourceDir, relPath, displayName, creatorID)
 	if err := app.Save(record); err != nil {
 		return nil, false, err
 	}
@@ -464,10 +465,19 @@ func ensurePrototypeRecord(app core.App, collection *core.Collection, mapping *s
 	return record, true, nil
 }
 
-func applyProjectFields(record *core.Record, relPath string, displayName string, creatorID string) {
+func applyProjectFields(record *core.Record, sourceDir string, relPath string, displayName string, creatorID string) {
 	setFieldIfExists(record, "name", displayName)
 	setFieldIfExists(record, "description", autoDescription(relPath))
 	setFieldIfExists(record, "creator", creatorID)
+
+	coverFile, err := resolveProjectCoverFile(sourceDir, relPath)
+	if err != nil {
+		log.Printf("解析项目封面失败 [%s]: %v", relPath, err)
+		return
+	}
+	if coverFile != nil {
+		setFieldIfExists(record, "cover", coverFile)
+	}
 }
 
 func applyPrototypeFields(record *core.Record, relPath string, projectID string, creatorID string) {
@@ -491,6 +501,105 @@ func isAutoPrototypeRecord(record *core.Record) bool {
 func setFieldIfExists(record *core.Record, name string, value any) {
 	if record.Collection().Fields.GetByName(name) != nil {
 		record.Set(name, value)
+	}
+}
+
+func resolveProjectCoverFile(sourceDir string, relPath string) (*filesystem.File, error) {
+	projectDir := filepath.Join(sourceDir, filepath.FromSlash(relPath))
+	imagesDir := filepath.Join(projectDir, "images")
+
+	info, err := os.Stat(imagesDir)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, nil
+	}
+
+	entries, err := os.ReadDir(imagesDir)
+	if err != nil {
+		return nil, err
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	for _, entry := range entries {
+		if !entry.IsDir() || isHiddenName(entry.Name()) {
+			continue
+		}
+
+		imagePath, err := findFirstImagePath(filepath.Join(imagesDir, entry.Name()))
+		if err != nil {
+			return nil, err
+		}
+		if imagePath == "" {
+			continue
+		}
+
+		return filesystem.NewFileFromPath(imagePath)
+	}
+
+	for _, entry := range entries {
+		if entry.IsDir() || isHiddenName(entry.Name()) {
+			continue
+		}
+		if !isSupportedProjectImage(entry.Name()) {
+			continue
+		}
+
+		return filesystem.NewFileFromPath(filepath.Join(imagesDir, entry.Name()))
+	}
+
+	return nil, nil
+}
+
+func findFirstImagePath(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Name() < entries[j].Name()
+	})
+
+	for _, entry := range entries {
+		if entry.IsDir() || isHiddenName(entry.Name()) {
+			continue
+		}
+		if isSupportedProjectImage(entry.Name()) {
+			return filepath.Join(dir, entry.Name()), nil
+		}
+	}
+
+	for _, entry := range entries {
+		if !entry.IsDir() || isHiddenName(entry.Name()) {
+			continue
+		}
+
+		imagePath, err := findFirstImagePath(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return "", err
+		}
+		if imagePath != "" {
+			return imagePath, nil
+		}
+	}
+
+	return "", nil
+}
+
+func isSupportedProjectImage(name string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".jpg", ".jpeg", ".png", ".svg", ".gif", ".webp":
+		return true
+	default:
+		return false
 	}
 }
 

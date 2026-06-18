@@ -26,6 +26,9 @@ export const PrototypeList = () => {
 
   const { tableProps, filters, searchFormProps } = useTable({
     syncWithLocation: true,
+    pagination: {
+      pageSize: 50,
+    },
     onSearch: (values: any) => {
       return [
         {
