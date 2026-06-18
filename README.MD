@@ -1,68 +1,59 @@
-# 原型管理系统 (Prototype System)
+# 原型管理系统
 
-这是一个前后端分离开发、单容器部署的全栈项目，提供项目原型的版本管理、预览和下载等功能。
+这是一个前后端分离开发、单容器部署的原型管理系统，提供项目管理、版本预览、下载，以及按目录扫描导入原型项目的能力。
 
 ## 项目结构
 
 ```text
 .
-├── frontend/             # 前端代码目录
-│   ├── src/              # React 组件和页面代码
-│   ├── package.json      # 前端依赖配置
-│   ├── vite.config.ts    # Vite 构建配置
-│   └── ...
-├── backend/              # 后端代码目录
-│   ├── main.go           # Go 主程序入口
-│   ├── Dockerfile        # 单容器部署镜像（包含前端构建产物）
-│   ├── pb_data/          # 数据库文件目录（如存在）
-│   └── ...
-└── .github/workflows/    # CI/CD 自动化构建配置
-    └── backend.yml       # 后端 GitHub Actions
+├── frontend/             # React + Vite 前端
+├── backend/              # Go + PocketBase 后端
+│   ├── main.go
+│   ├── migrations/
+│   └── Dockerfile        # 单容器镜像，构建前端并打包后端
+├── docker-compose.yml    # 单容器部署示例
+└── .github/workflows/
+    └── backend.yml       # 镜像发布流程
 ```
 
-## 本地开发指南
+## 核心说明
 
-### 前端开发
+- 开发模式下，前后端仍然分开运行。
+- 部署模式下，只需要一个容器、一个端口。
+- 容器内同时提供：
+  - PocketBase API
+  - 前端静态页面
+  - 原型预览静态资源
+- 原型扫描目录支持通过环境变量配置。
+- 项目和版本支持从目录自动扫描导入；当前策略是每个项目自动关联一个固定版本。
 
-进入前端目录并启动开发服务器：
+## 本地开发
+
+### 前端
 
 ```bash
 cd frontend
 pnpm install
-pnpm run dev
+pnpm dev
 ```
 
-前端服务默认在本地端口（通常是 `http://localhost:5173`）启动。
-开发模式下前端默认请求同主机的 `9000` 端口后端。
-如需指定后端地址，可在启动前设置 `VITE_BACKEND_BASE_URL`，例如：
+- 默认开发地址通常是 `http://localhost:5173`
+- 开发模式下前端默认请求同主机的 `9000` 端口
+- 如需手动指定后端地址：
 
 ```bash
 cd frontend
-VITE_BACKEND_BASE_URL=http://127.0.0.1:9000 pnpm run dev
+VITE_BACKEND_BASE_URL=http://127.0.0.1:9000 pnpm dev
 ```
 
-### 后端开发
-
-进入后端目录并运行或构建 Go 项目：
+### 后端
 
 ```bash
 cd backend
-go run main.go
-# 或
-go build -o app
+go build -o my-pb .
 ```
 
-正式运行时支持以下环境变量：
-
-```bash
-DEFAULT_ADMIN_EMAIL=admin@example.com
-DEFAULT_ADMIN_PASSWORD=12345678
-PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper
-```
-
-上面这组变量适用于直接运行二进制。
-
-示例：
+直接运行示例：
 
 ```bash
 cd backend
@@ -72,74 +63,141 @@ PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper \
 ./my-pb serve --http=127.0.0.1:9000 --dir=./pb_data
 ```
 
-## 正式打包与部署
+说明：
 
-- 单容器运行时读取：
-  - `DEFAULT_ADMIN_EMAIL`
-  - `DEFAULT_ADMIN_PASSWORD`
-  - `PROTOTYPE_SOURCE_DIR`
+- `DEFAULT_ADMIN_EMAIL` / `DEFAULT_ADMIN_PASSWORD` 用于初始化默认管理员和默认业务用户
+- `PROTOTYPE_SOURCE_DIR` 是后端实际扫描的目录
+- 表结构会通过 PocketBase migrations 自动初始化
 
-如果使用 Docker Compose，可以直接使用当前 shell 环境变量执行：
+## 单容器部署
+
+部署时推荐直接使用已发布镜像，不需要再单独部署前端容器。
+
+### 推荐方式：直接拉取镜像
+
+```yaml
+version: '3.8'
+
+services:
+  app:
+    image: ghcr.io/rj9676564/lb-prototype-system-backend:1.0.8
+    container_name: prototype-app
+    restart: unless-stopped
+    ports:
+      - "23200:9000"
+    environment:
+      DEFAULT_ADMIN_EMAIL: admin@example.com
+      DEFAULT_ADMIN_PASSWORD: 12345678
+      PROTOTYPE_SOURCE_DIR: /app/source-prototypes
+    volumes:
+      - ./pb_data:/app/pb_data
+      - /tmp/zfsv3/nvme11/18126010730/data/company/demand:/app/source-prototypes:ro
+```
+
+启动：
 
 ```bash
-DEFAULT_ADMIN_EMAIL=admin@example.com \
-DEFAULT_ADMIN_PASSWORD=12345678 \
-HOST_PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper \
-PB_DATA_DIR=./pb_data \
-APP_PORT=9000 \
-docker compose up --build -d
+docker compose up -d
+```
+
+访问地址：
+
+```text
+http://<宿主机IP>:23200
 ```
 
 说明：
 
-- `app` 是唯一需要部署的容器
-- 容器内同时承载：
-  - PocketBase API
-  - 前端静态资源
-  - 原型预览静态资源
-- 生产环境前端默认走同源访问，即浏览器直接请求当前站点的 `/api/...`
-- `docker-compose.yml` 中不会直接使用宿主机目录作为 `PROTOTYPE_SOURCE_DIR`
-- 正确做法是把宿主机原型目录通过 `HOST_PROTOTYPE_SOURCE_DIR` 挂载到容器内 `/app/source-prototypes`
-- 容器内实际生效的扫描目录固定为 `/app/source-prototypes`
+- 外部只需要暴露一个端口
+- 容器内部服务端口固定是 `9000`
+- 宿主机原型目录挂载到容器内 `/app/source-prototypes`
+- 容器内真正生效的 `PROTOTYPE_SOURCE_DIR` 应写成 `/app/source-prototypes`
 
-环境变量示例：
+### 可选方式：本机构建
 
-```bash
-DEFAULT_ADMIN_EMAIL=admin@example.com
-DEFAULT_ADMIN_PASSWORD=12345678
-HOST_PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper
-PB_DATA_DIR=./pb_data
-APP_PORT=9000
+如果你不是拉镜像，而是在目标机器本地构建，那么必须把完整仓库放到机器上，并从仓库根目录构建。
+
+原因：
+
+- 单容器 Dockerfile 会同时 `COPY frontend/` 和 `COPY backend/`
+- 所以 `build.context` 必须是仓库根目录 `.`
+- 不能再使用旧的 `context: ./backend` 写法
+
+示例：
+
+```yaml
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: prototype-app
+    restart: unless-stopped
+    ports:
+      - "23200:9000"
+    environment:
+      DEFAULT_ADMIN_EMAIL: admin@example.com
+      DEFAULT_ADMIN_PASSWORD: 12345678
+      PROTOTYPE_SOURCE_DIR: /app/source-prototypes
+    volumes:
+      - ./pb_data:/app/pb_data
+      - /tmp/zfsv3/nvme11/18126010730/data/company/demand:/app/source-prototypes:ro
 ```
 
-其中：
+## 环境变量
 
-- 直接运行后端二进制时，使用 `PROTOTYPE_SOURCE_DIR`
-- 使用 `docker compose` 时，配置的是宿主机目录 `HOST_PROTOTYPE_SOURCE_DIR`
-- Compose 会把它挂载到容器内固定路径 `/app/source-prototypes`，再由后端通过 `PROTOTYPE_SOURCE_DIR=/app/source-prototypes` 读取
-- 生产部署时外部只需要关心一个访问入口，例如 `http://your-host:9000`
+直接运行二进制时：
 
-## CI/CD 自动化部署
+- `DEFAULT_ADMIN_EMAIL`
+- `DEFAULT_ADMIN_PASSWORD`
+- `PROTOTYPE_SOURCE_DIR`
 
-本项目使用 GitHub Actions 进行自动化构建。
-部署镜像统一由 `backend.yml` 构建，它会同时：
+使用 Docker Compose 时：
+
+- `DEFAULT_ADMIN_EMAIL`
+- `DEFAULT_ADMIN_PASSWORD`
+- 容器内 `PROTOTYPE_SOURCE_DIR` 固定建议写 `/app/source-prototypes`
+- 宿主机真实目录通过 volume 挂载到 `/app/source-prototypes`
+
+## ARM / NAS 说明
+
+- 当前单容器镜像已按 `linux/amd64` 和 `linux/arm64` 发布
+- ARM 设备建议优先使用官方 GHCR 镜像
+- 如果镜像代理站拉不到 tag 或 manifest，不代表官方 GHCR 没有该镜像
+- 遇到代理同步问题时，优先测试：
+
+```bash
+docker pull ghcr.io/rj9676564/lb-prototype-system-backend:1.0.8
+```
+
+## CI/CD
+
+镜像由 `.github/workflows/backend.yml` 统一构建并发布。
+
+发布逻辑：
 
 - 构建前端静态资源
 - 构建后端二进制
-- 打包成单个运行镜像
+- 打包为单个运行镜像
+- 发布 `amd64` 和 `arm64` 多架构镜像
 
-### 触发部署镜像构建
-
-执行以下命令并推送到远程仓库，将自动启动 `backend.yml` 中定义的镜像构建任务：
+触发发布：
 
 ```bash
-# 构建对应的 tag 需要以 'b' 开头，如 b1.0.0
-git tag b1.0.0
-git push origin b1.0.0
+git tag b1.0.8
+git push origin b1.0.8
 ```
 
-## 技术栈引用
+说明：
 
-- **前端**: React, [@refinedev/core](https://refine.dev/), [@refinedev/antd](https://refine.dev/docs/ui-frameworks/antd/tutorial/), Ant Design, Vite
-- **后端**: Go, [PocketBase](https://pocketbase.io/)
-- **部署**: 单容器镜像，运行时由 PocketBase 提供 API 与静态页面
+- Git tag 以 `b` 开头
+- 例如仓库 tag 是 `b1.0.8`
+- 最终镜像 tag 会发布为 `1.0.8`
+
+## 技术栈
+
+- 前端：React、Refine、Ant Design、Vite
+- 后端：Go、PocketBase
+- 部署：单容器镜像，由 PocketBase 提供 API 和静态资源

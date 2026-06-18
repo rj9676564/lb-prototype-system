@@ -6,7 +6,7 @@ import {
   DeleteButton,
   DateField,
 } from "@refinedev/antd";
-import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex } from "antd";
+import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex, Modal } from "antd";
 import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined } from "@ant-design/icons";
 import { useMany, useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router";
@@ -123,10 +123,27 @@ export const ProjectList = () => {
         throw new Error(result?.message || result?.data?.message || "扫描导入失败");
       }
 
+      const skippedPaths: string[] = Array.isArray(result.skipped_paths) ? result.skipped_paths : [];
+      const skippedCount = skippedPaths.length;
+
       await messageApi.success(
-        `扫描完成：扫描 ${result.scanned_projects ?? 0} 个项目，新增项目 ${result.created_projects ?? 0} 个，更新项目 ${result.updated_projects ?? 0} 个。`,
+        `扫描完成：发现 ${result.scanned_projects ?? 0} 个项目，成功同步 ${result.synced_projects ?? 0} 个，新增项目 ${result.created_projects ?? 0} 个，更新项目 ${result.updated_projects ?? 0} 个，跳过 ${skippedCount} 个。`,
       );
-      window.location.reload();
+
+      if (skippedCount > 0) {
+        Modal.warning({
+          title: "部分项目导入失败",
+          width: 760,
+          content: (
+            <div style={{ maxHeight: 420, overflow: "auto", whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
+              {skippedPaths.join("\n")}
+            </div>
+          ),
+        });
+      }
+
+      searchFormProps.form?.resetFields();
+      navigate("/rp_project", { replace: true });
     } catch (error: any) {
       messageApi.error(error?.message || "扫描导入失败");
     } finally {

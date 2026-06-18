@@ -37,6 +37,7 @@ type scanMapping struct {
 
 type syncSummary struct {
 	ScannedProjects int      `json:"scanned_projects"`
+	SyncedProjects  int      `json:"synced_projects"`
 	CreatedProjects int      `json:"created_projects"`
 	UpdatedProjects int      `json:"updated_projects"`
 	CreatedVersions int      `json:"created_versions"`
@@ -319,23 +320,29 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 		return nil, errors.New("PROTOTYPE_SOURCE_DIR 不是目录")
 	}
 
+	log.Printf("[Scanner] 开始分析并载入原型路径，源目录: %s", absSourceDir)
 	paths, skipped, err := discoverPrototypePaths(absSourceDir)
 	if err != nil {
+		log.Printf("[Scanner] 探索原型目录发生错误: %v", err)
 		return nil, err
 	}
+	log.Printf("[Scanner] 探索完成。有效项目路径: %d 个, 忽略/跳过路径: %d 个", len(paths), len(skipped))
 
 	mapping, err := loadScanMapping(app)
 	if err != nil {
+		log.Printf("[Scanner] 载入扫描 mapping 文件失败: %v", err)
 		return nil, err
 	}
 
 	projectCollection, err := app.FindCollectionByNameOrId("rp_project")
 	if err != nil {
+		log.Printf("[Scanner] 获取 rp_project collection 失败: %v", err)
 		return nil, err
 	}
 
 	prototypeCollection, err := app.FindCollectionByNameOrId("rp_prototype")
 	if err != nil {
+		log.Printf("[Scanner] 获取 rp_prototype collection 失败: %v", err)
 		return nil, err
 	}
 
@@ -346,41 +353,55 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 
 	for _, relPath := range paths {
 		displayName := filepath.Base(relPath)
+		log.Printf("[Scanner] ===> 开始同步项目 [%s]", relPath)
 		projectRecord, createdProject, err := ensureProjectRecord(app, projectCollection, mapping, absSourceDir, relPath, displayName, creatorID)
 		if err != nil {
-			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": "+err.Error())
+			log.Printf("[Scanner] 同步项目记录失败 [%s]: %v", relPath, err)
+			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": [Project] "+err.Error())
 			continue
 		}
 		if createdProject {
 			summary.CreatedProjects++
+			log.Printf("[Scanner] 项目记录新建成功 [%s] (ID: %s)", relPath, projectRecord.Id)
 		} else {
 			summary.UpdatedProjects++
+			log.Printf("[Scanner] 项目记录更新成功 [%s] (ID: %s)", relPath, projectRecord.Id)
 		}
 
 		_, createdVersion, err := ensurePrototypeRecord(app, prototypeCollection, mapping, relPath, projectRecord, creatorID)
 		if err != nil {
-			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": "+err.Error())
+			log.Printf("[Scanner] 同步版本记录失败 [%s]: %v", relPath, err)
+			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": [Version] "+err.Error())
 			continue
 		}
 		if createdVersion {
 			summary.CreatedVersions++
+			log.Printf("[Scanner] 版本记录新建成功 [%s]", relPath)
 		} else {
 			summary.UpdatedVersions++
+			log.Printf("[Scanner] 版本记录更新成功 [%s]", relPath)
 		}
+
+		summary.SyncedProjects++
 	}
 
 	if err := saveScanMapping(app, mapping); err != nil {
+		log.Printf("[Scanner] 保存扫描 mapping 记录发生错误: %v", err)
 		return nil, err
 	}
 
 	sort.Strings(summary.SkippedPaths)
+	log.Printf("[Scanner] === 同步全部完成。扫描发现项目数: %d, 成功同步项目数: %d, 新增项目数: %d, 更新项目数: %d ===", 
+		summary.ScannedProjects, summary.SyncedProjects, summary.CreatedProjects, summary.UpdatedProjects)
 
 	return summary, nil
 }
 
 func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
+	log.Printf("[Scanner] 开始扫描源目录: %s", sourceDir)
 	entries, err := os.ReadDir(sourceDir)
 	if err != nil {
+		log.Printf("[Scanner] 读取目录失败: %v", err)
 		return nil, nil, err
 	}
 
@@ -388,7 +409,11 @@ func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
 	var skipped []string
 
 	for _, entry := range entries {
-		if !entry.IsDir() || isHiddenName(entry.Name()) {
+		// 判断是否是文件夹（支持软链接）
+		isDir := isEntryDir(sourceDir, entry)
+		log.Printf("[Scanner] [一级条目] Name: %s, IsDir: %v, Type: %s", entry.Name(), isDir, entry.Type())
+
+		if !isDir || isHiddenName(entry.Name()) {
 			continue
 		}
 
@@ -396,22 +421,30 @@ func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
 		topLevelAbs := filepath.Join(sourceDir, topLevelPath)
 		hasIndex, err := containsIndexHTML(topLevelAbs)
 		if err != nil {
+			log.Printf("[Scanner] [一级条目检查] 检查含有 index.html 失败 [%s]: %v", topLevelPath, err)
 			skipped = append(skipped, topLevelPath+": "+err.Error())
 			continue
 		}
 		if hasIndex {
+			log.Printf("[Scanner] [一级条目匹配] 发现含有 index.html, 作为项目路径: %s", topLevelPath)
 			paths = append(paths, topLevelPath)
 			continue
 		}
 
+		// 如果一级目录没有 index.html，扫描二级子目录
+		log.Printf("[Scanner] [一级条目未匹配] 正在深入扫描二级子目录: %s", topLevelPath)
 		childEntries, err := os.ReadDir(topLevelAbs)
 		if err != nil {
+			log.Printf("[Scanner] [二级条目读取] 读取子目录失败 [%s]: %v", topLevelPath, err)
 			skipped = append(skipped, topLevelPath+": "+err.Error())
 			continue
 		}
 
 		for _, child := range childEntries {
-			if !child.IsDir() || isHiddenName(child.Name()) {
+			isChildDir := isEntryDir(topLevelAbs, child)
+			log.Printf("[Scanner]   [二级子条目] Name: %s/%s, IsDir: %v, Type: %s", topLevelPath, child.Name(), isChildDir, child.Type())
+
+			if !isChildDir || isHiddenName(child.Name()) {
 				continue
 			}
 
@@ -419,10 +452,12 @@ func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
 			childAbs := filepath.Join(sourceDir, childPath)
 			hasIndex, err := containsIndexHTML(childAbs)
 			if err != nil {
+				log.Printf("[Scanner]   [二级条目检查] 检查含有 index.html 失败 [%s]: %v", childPath, err)
 				skipped = append(skipped, childPath+": "+err.Error())
 				continue
 			}
 			if hasIndex {
+				log.Printf("[Scanner]   [二级条目匹配] 发现含有 index.html, 作为项目路径: %s", childPath)
 				paths = append(paths, filepath.ToSlash(childPath))
 			}
 		}
@@ -534,7 +569,7 @@ func resolveProjectCoverFile(sourceDir string, relPath string) (*filesystem.File
 	})
 
 	for _, entry := range entries {
-		if !entry.IsDir() || isHiddenName(entry.Name()) {
+		if !isEntryDir(imagesDir, entry) || isHiddenName(entry.Name()) {
 			continue
 		}
 
@@ -550,7 +585,7 @@ func resolveProjectCoverFile(sourceDir string, relPath string) (*filesystem.File
 	}
 
 	for _, entry := range entries {
-		if entry.IsDir() || isHiddenName(entry.Name()) {
+		if isEntryDir(imagesDir, entry) || isHiddenName(entry.Name()) {
 			continue
 		}
 		if !isSupportedProjectImage(entry.Name()) {
@@ -574,7 +609,7 @@ func findFirstImagePath(dir string) (string, error) {
 	})
 
 	for _, entry := range entries {
-		if entry.IsDir() || isHiddenName(entry.Name()) {
+		if isEntryDir(dir, entry) || isHiddenName(entry.Name()) {
 			continue
 		}
 		if isSupportedProjectImage(entry.Name()) {
@@ -583,7 +618,7 @@ func findFirstImagePath(dir string) (string, error) {
 	}
 
 	for _, entry := range entries {
-		if !entry.IsDir() || isHiddenName(entry.Name()) {
+		if !isEntryDir(dir, entry) || isHiddenName(entry.Name()) {
 			continue
 		}
 
@@ -621,6 +656,19 @@ func containsIndexHTML(dir string) (bool, error) {
 
 func isHiddenName(name string) bool {
 	return strings.HasPrefix(name, ".")
+}
+
+func isEntryDir(parentDir string, entry fs.DirEntry) bool {
+	if entry.IsDir() {
+		return true
+	}
+	if entry.Type()&os.ModeSymlink != 0 {
+		info, err := os.Stat(filepath.Join(parentDir, entry.Name()))
+		if err == nil {
+			return info.IsDir()
+		}
+	}
+	return false
 }
 
 func ensureSafeLinkedProjectPath(path string) error {
