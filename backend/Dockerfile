@@ -17,6 +17,9 @@ RUN npm run build
 
 FROM --platform=$BUILDPLATFORM golang:1.25-alpine AS backend-builder
 
+ARG TARGETOS
+ARG TARGETARCH
+
 RUN apk add --no-cache git gcc musl-dev
 
 WORKDIR /backend
@@ -26,9 +29,9 @@ RUN go mod download
 
 COPY backend/ ./
 
-RUN CGO_ENABLED=0 go build -o /app/my-pb .
+RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -o /app/my-pb .
 
-FROM alpine:latest
+FROM --platform=$TARGETPLATFORM alpine:latest
 
 RUN apk add --no-cache ca-certificates tzdata bash
 
