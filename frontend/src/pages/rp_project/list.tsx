@@ -216,7 +216,7 @@ export const ProjectList = () => {
                       type="primary"
                       icon={<GlobalOutlined />}
                       onClick={() => {
-                        openPreview(latestPrototype.url, `${record.name} - ${latestPrototype.title || "最新版本"}`);
+                        openPreview(latestPrototype.url!, `${record.name} - ${latestPrototype.title || "最新版本"}`);
                       }}
                     >
                       预览最新
