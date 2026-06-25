@@ -231,8 +231,8 @@ export const ProjectList = () => {
                 </Button>
                 {isCreator && (
                   <>
-                    <EditButton hideText size="small" recordItemId={record.id} />
-                    <DeleteButton hideText size="small" recordItemId={record.id} />
+                    <EditButton hideText recordItemId={record.id} />
+                    <DeleteButton hideText recordItemId={record.id} />
                   </>
                 )}
               </Space>
