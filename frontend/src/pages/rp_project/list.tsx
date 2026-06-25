@@ -210,26 +210,25 @@ export const ProjectList = () => {
             const latestPrototype = latestPrototypeMap[record.id];
             return (
               <Space>
+                {latestPrototype?.url && (
+                  <Tooltip title="预览最新版本">
+                    <Button
+                      type="primary"
+                      icon={<GlobalOutlined />}
+                      onClick={() => {
+                        openPreview(latestPrototype.url, `${record.name} - ${latestPrototype.title || "最新版本"}`);
+                      }}
+                    >
+                      预览最新
+                    </Button>
+                  </Tooltip>
+                )}
                 <Button
                   icon={<EyeOutlined />}
-                  size="small"
                   onClick={() => navigate(`/rp_prototype?filters[0][field]=project&filters[0][operator]=eq&filters[0][value]=${record.id}`)}
                 >
                   查看版本
                 </Button>
-                <Tooltip title={latestPrototype?.url ? "预览最新版本" : "暂无可预览版本"}>
-                  <Button
-                    icon={<GlobalOutlined />}
-                    size="small"
-                    disabled={!latestPrototype?.url}
-                    onClick={() => {
-                      if (!latestPrototype?.url) return;
-                      openPreview(latestPrototype.url, `${record.name} - ${latestPrototype.title || "最新版本"}`);
-                    }}
-                  >
-                    预览最新
-                  </Button>
-                </Tooltip>
                 {isCreator && (
                   <>
                     <EditButton hideText size="small" recordItemId={record.id} />
