@@ -215,23 +215,23 @@ export const ProjectList = () => {
             const latestPrototype = latestPrototypeMap[record.id];
             return (
               <Space>
-                <Tooltip title={latestPrototype?.url ? "预览最新版本" : "暂无可预览版本"}>
-                  <Button
-                    icon={<GlobalOutlined />}
-                    size="small"
-                    disabled={!latestPrototype?.url}
-                    onClick={() => {
-                      if (!latestPrototype?.url) return;
-                      openPreview(
-                        latestPrototype.url,
-                        `${record.name} - ${latestPrototype.title || "最新版本"}`,
-                        latestPrototype.updated,
-                      );
-                    }}
-                  >
-                    预览最新
-                  </Button>
-                </Tooltip>
+                {latestPrototype?.url && (
+                  <Tooltip title="预览最新版本">
+                    <Button
+                      type="primary"
+                      icon={<GlobalOutlined />}
+                      onClick={() => {
+                        openPreview(
+                          latestPrototype.url!,
+                          `${record.name} - ${latestPrototype.title || "最新版本"}`,
+                          latestPrototype.updated,
+                        );
+                      }}
+                    >
+                      预览最新
+                    </Button>
+                  </Tooltip>
+                )}
                 <Button
                   icon={<EyeOutlined />}
                   onClick={() => navigate(`/rp_prototype?filters[0][field]=project&filters[0][operator]=eq&filters[0][value]=${record.id}`)}
