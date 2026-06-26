@@ -153,7 +153,9 @@ export const ProjectList = () => {
 
   const openPreview = (url: string, title: string) => {
     const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
-    setPreviewUrl(fullUrl);
+    const separator = fullUrl.includes("?") ? "&" : "?";
+    const busterUrl = `${fullUrl}${separator}t=${new Date().getTime()}`;
+    setPreviewUrl(busterUrl);
     setDrawerTitle(title);
   };
 

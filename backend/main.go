@@ -67,6 +67,9 @@ func main() {
 
 				e.Response.Header().Del("X-Frame-Options")
 				e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
+				e.Response.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				e.Response.Header().Set("Pragma", "no-cache")
+				e.Response.Header().Set("Expires", "0")
 
 				return apis.Static(os.DirFS(sourceDir), false)(e)
 			})
@@ -98,7 +101,14 @@ func main() {
 			e.Response.Header().Del("X-Frame-Options")
 			e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
 
-			if shouldServeSPAIndex(e.Request.PathValue(apis.StaticWildcardParam)) {
+			requestPath := e.Request.PathValue(apis.StaticWildcardParam)
+			if strings.HasPrefix(strings.TrimPrefix(requestPath, "/"), "projects/") {
+				e.Response.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+				e.Response.Header().Set("Pragma", "no-cache")
+				e.Response.Header().Set("Expires", "0")
+			}
+
+			if shouldServeSPAIndex(requestPath) {
 				http.ServeFile(e.Response, e.Request, filepath.Join("pb_public", "index.html"))
 				return nil
 			}
@@ -152,6 +162,7 @@ func main() {
 
 		destDir := filepath.Join("pb_public", "projects", recordId)
 
+		os.RemoveAll(destDir)
 		os.MkdirAll(destDir, os.ModePerm)
 		log.Println("准备解压到文件夹:", destDir)
 

@@ -160,7 +160,9 @@ export const PrototypeList = () => {
                         const fullUrl = record.url.startsWith('/') 
                           ? `${BASE_URL}${record.url}` 
                           : record.url;
-                        setPreviewUrl(fullUrl);
+                        const separator = fullUrl.includes("?") ? "&" : "?";
+                        const busterUrl = `${fullUrl}${separator}t=${new Date().getTime()}`;
+                        setPreviewUrl(busterUrl);
                         setDrawerTitle(record.title);
                       }}
                     />
