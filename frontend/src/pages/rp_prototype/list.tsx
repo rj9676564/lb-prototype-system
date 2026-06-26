@@ -161,7 +161,8 @@ export const PrototypeList = () => {
                           ? `${BASE_URL}${record.url}` 
                           : record.url;
                         const separator = fullUrl.includes("?") ? "&" : "?";
-                        const busterUrl = `${fullUrl}${separator}t=${new Date().getTime()}`;
+                        const version = record.updated ? encodeURIComponent(record.updated) : new Date().getTime().toString();
+                        const busterUrl = `${fullUrl}${separator}v=${version}`;
                         setPreviewUrl(busterUrl);
                         setDrawerTitle(record.title);
                       }}

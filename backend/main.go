@@ -67,9 +67,8 @@ func main() {
 
 				e.Response.Header().Del("X-Frame-Options")
 				e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
-				e.Response.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-				e.Response.Header().Set("Pragma", "no-cache")
-				e.Response.Header().Set("Expires", "0")
+				// 启用协商缓存：允许浏览器缓存资源以提升加载速度，但每次使用缓存前必须向服务器验证以确保内容是最新的
+				e.Response.Header().Set("Cache-Control", "no-cache, must-revalidate")
 
 				return apis.Static(os.DirFS(sourceDir), false)(e)
 			})
@@ -103,9 +102,8 @@ func main() {
 
 			requestPath := e.Request.PathValue(apis.StaticWildcardParam)
 			if strings.HasPrefix(strings.TrimPrefix(requestPath, "/"), "projects/") {
-				e.Response.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-				e.Response.Header().Set("Pragma", "no-cache")
-				e.Response.Header().Set("Expires", "0")
+				// 启用协商缓存：允许浏览器缓存资源以提升加载速度，但每次使用缓存前必须向服务器验证以确保内容是最新的
+				e.Response.Header().Set("Cache-Control", "no-cache, must-revalidate")
 			}
 
 			if shouldServeSPAIndex(requestPath) {

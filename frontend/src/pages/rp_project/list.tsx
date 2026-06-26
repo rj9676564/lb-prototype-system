@@ -16,6 +16,7 @@ import { API_URL, BASE_URL } from "../../providers/constants";
 type LatestPrototypeMeta = {
   title?: string;
   url?: string;
+  updated?: string;
 };
 
 export const ProjectList = () => {
@@ -87,6 +88,7 @@ export const ProjectList = () => {
                 ? {
                     title: latest.title,
                     url: latest.url,
+                    updated: latest.updated,
                   }
                 : {},
             ] as const;
@@ -151,10 +153,11 @@ export const ProjectList = () => {
     }
   };
 
-  const openPreview = (url: string, title: string) => {
+  const openPreview = (url: string, title: string, updated?: string) => {
     const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
     const separator = fullUrl.includes("?") ? "&" : "?";
-    const busterUrl = `${fullUrl}${separator}t=${new Date().getTime()}`;
+    const version = updated ? encodeURIComponent(updated) : new Date().getTime().toString();
+    const busterUrl = `${fullUrl}${separator}v=${version}`;
     setPreviewUrl(busterUrl);
     setDrawerTitle(title);
   };
@@ -212,19 +215,23 @@ export const ProjectList = () => {
             const latestPrototype = latestPrototypeMap[record.id];
             return (
               <Space>
-                {latestPrototype?.url && (
-                  <Tooltip title="预览最新版本">
-                    <Button
-                      type="primary"
-                      icon={<GlobalOutlined />}
-                      onClick={() => {
-                        openPreview(latestPrototype.url!, `${record.name} - ${latestPrototype.title || "最新版本"}`);
-                      }}
-                    >
-                      预览最新
-                    </Button>
-                  </Tooltip>
-                )}
+                <Tooltip title={latestPrototype?.url ? "预览最新版本" : "暂无可预览版本"}>
+                  <Button
+                    icon={<GlobalOutlined />}
+                    size="small"
+                    disabled={!latestPrototype?.url}
+                    onClick={() => {
+                      if (!latestPrototype?.url) return;
+                      openPreview(
+                        latestPrototype.url,
+                        `${record.name} - ${latestPrototype.title || "最新版本"}`,
+                        latestPrototype.updated,
+                      );
+                    }}
+                  >
+                    预览最新
+                  </Button>
+                </Tooltip>
                 <Button
                   icon={<EyeOutlined />}
                   onClick={() => navigate(`/rp_prototype?filters[0][field]=project&filters[0][operator]=eq&filters[0][value]=${record.id}`)}
