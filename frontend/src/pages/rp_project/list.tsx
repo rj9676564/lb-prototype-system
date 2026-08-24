@@ -28,7 +28,7 @@ export const ProjectList = () => {
   const [drawerTitle, setDrawerTitle] = React.useState<string>("");
   const [latestPrototypeMap, setLatestPrototypeMap] = React.useState<Record<string, LatestPrototypeMeta>>({});
 
-  const { tableProps, searchFormProps } = useTable({
+  const { tableProps, searchFormProps, tableQuery } = useTable({
     syncWithLocation: true,
     pagination: {
       pageSize: 50,
@@ -128,8 +128,12 @@ export const ProjectList = () => {
       const skippedPaths: string[] = Array.isArray(result.skipped_paths) ? result.skipped_paths : [];
       const skippedCount = skippedPaths.length;
 
+      const scannedCount = result.scanned_projects ?? 0;
+      const syncedCount = result.synced_projects ?? 0;
+      const unsyncedCount = Math.max(scannedCount - syncedCount, skippedCount);
+
       await messageApi.success(
-        `扫描完成：发现 ${result.scanned_projects ?? 0} 个项目，成功同步 ${result.synced_projects ?? 0} 个，新增项目 ${result.created_projects ?? 0} 个，更新项目 ${result.updated_projects ?? 0} 个，跳过 ${skippedCount} 个。`,
+        `扫描完成：发现 ${scannedCount} 个候选项目，成功同步 ${syncedCount} 个（新增 ${result.created_projects ?? 0}，更新 ${result.updated_projects ?? 0}），未同步 ${unsyncedCount} 个。`,
       );
 
       if (skippedCount > 0) {
@@ -145,7 +149,7 @@ export const ProjectList = () => {
       }
 
       searchFormProps.form?.resetFields();
-      navigate("/rp_project", { replace: true });
+      await tableQuery.refetch();
     } catch (error: any) {
       messageApi.error(error?.message || "扫描导入失败");
     } finally {
