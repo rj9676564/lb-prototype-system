@@ -118,6 +118,7 @@ func ensureProjectCollection(app core.App) error {
 		&core.FileField{
 			Name:      "cover",
 			MaxSelect: 1,
+			Thumbs:    []string{"160x160", "320x320"},
 			MimeTypes: []string{"image/jpeg", "image/png", "image/svg+xml", "image/svg", "image/gif", "image/webp", "text/xml", "text/plain", "application/octet-stream"},
 		},
 		&core.RelationField{

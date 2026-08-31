@@ -179,7 +179,7 @@ export const ProjectList = () => {
           render={(value, record: any) =>
             value ? (
               <Avatar
-                src={`${API_URL}/files/rp_project/${record.id}/${value}`}
+                src={`${API_URL}/files/rp_project/${record.id}/${value}?thumb=160x160`}
                 shape="square"
                 size={80}
               />

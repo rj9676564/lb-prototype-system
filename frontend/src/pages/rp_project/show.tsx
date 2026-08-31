@@ -19,7 +19,10 @@ export const ProjectShow = () => {
       <Title level={5}>封面</Title>
       {record?.cover ? (
         <Image
-          src={`${API_URL}/files/rp_project/${record?.id}/${record?.cover}`}
+          src={`${API_URL}/files/rp_project/${record?.id}/${record?.cover}?thumb=320x320`}
+          preview={{
+            src: `${API_URL}/files/rp_project/${record?.id}/${record?.cover}`,
+          }}
           width={200}
         />
       ) : (

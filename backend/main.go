@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -563,6 +565,30 @@ func setFieldIfExists(record *core.Record, name string, value any) {
 	}
 }
 
+var embeddedImageRegex = regexp.MustCompile(`(?i)<image[^>]+(?:xlink:href|href)=["']data:image\/(png|jpeg|jpg|webp|gif);base64,([^"'\s]+)["']`)
+
+func createCoverFileFromPath(imagePath string) (*filesystem.File, error) {
+	if strings.ToLower(filepath.Ext(imagePath)) == ".svg" {
+		data, err := os.ReadFile(imagePath)
+		if err == nil {
+			matches := embeddedImageRegex.FindSubmatch(data)
+			if len(matches) >= 3 {
+				ext := string(matches[1])
+				if ext == "jpeg" {
+					ext = "jpg"
+				}
+				b64Str := string(matches[2])
+				imgBytes, decErr := base64.StdEncoding.DecodeString(b64Str)
+				if decErr == nil && len(imgBytes) > 0 {
+					baseName := strings.TrimSuffix(filepath.Base(imagePath), filepath.Ext(imagePath))
+					return filesystem.NewFileFromBytes(imgBytes, baseName+"."+ext)
+				}
+			}
+		}
+	}
+	return filesystem.NewFileFromPath(imagePath)
+}
+
 func resolveProjectCoverFile(sourceDir string, relPath string) (*filesystem.File, error) {
 	projectDir := filepath.Join(sourceDir, filepath.FromSlash(relPath))
 	imagesDir := filepath.Join(projectDir, "images")
@@ -600,7 +626,7 @@ func resolveProjectCoverFile(sourceDir string, relPath string) (*filesystem.File
 			continue
 		}
 
-		return filesystem.NewFileFromPath(imagePath)
+		return createCoverFileFromPath(imagePath)
 	}
 
 	for _, entry := range entries {
@@ -611,7 +637,7 @@ func resolveProjectCoverFile(sourceDir string, relPath string) (*filesystem.File
 			continue
 		}
 
-		return filesystem.NewFileFromPath(filepath.Join(imagesDir, entry.Name()))
+		return createCoverFileFromPath(filepath.Join(imagesDir, entry.Name()))
 	}
 
 	return nil, nil
@@ -627,12 +653,19 @@ func findFirstImagePath(dir string) (string, error) {
 		return entries[i].Name() < entries[j].Name()
 	})
 
+	var svgFallback string
+
+	// 优先寻找真正的位图图片（png, jpg, webp 等）
 	for _, entry := range entries {
 		if isEntryDir(dir, entry) || isHiddenName(entry.Name()) {
 			continue
 		}
-		if isSupportedProjectImage(entry.Name()) {
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if isRasterImage(ext) {
 			return filepath.Join(dir, entry.Name()), nil
+		}
+		if ext == ".svg" && svgFallback == "" {
+			svgFallback = filepath.Join(dir, entry.Name())
 		}
 	}
 
@@ -646,11 +679,25 @@ func findFirstImagePath(dir string) (string, error) {
 			return "", err
 		}
 		if imagePath != "" {
-			return imagePath, nil
+			if isRasterImage(strings.ToLower(filepath.Ext(imagePath))) {
+				return imagePath, nil
+			}
+			if svgFallback == "" {
+				svgFallback = imagePath
+			}
 		}
 	}
 
-	return "", nil
+	return svgFallback, nil
+}
+
+func isRasterImage(ext string) bool {
+	switch ext {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+		return true
+	default:
+		return false
+	}
 }
 
 func isSupportedProjectImage(name string) bool {
