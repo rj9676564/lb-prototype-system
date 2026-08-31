@@ -17,7 +17,7 @@ export const ProjectShow = () => {
       <Title level={5}>ID</Title>
       <TextField value={record?.id} />
       <Title level={5}>封面</Title>
-      {record?.cover ? (
+      {record?.cover && !record.cover.toLowerCase().endsWith(".svg") ? (
         <Image
           src={`${API_URL}/files/rp_project/${record?.id}/${record?.cover}?thumb=320x320`}
           preview={{

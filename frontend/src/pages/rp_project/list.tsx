@@ -177,7 +177,7 @@ export const ProjectList = () => {
           dataIndex="cover"
           title="封面"
           render={(value, record: any) =>
-            value ? (
+            value && typeof value === "string" && !value.toLowerCase().endsWith(".svg") ? (
               <Avatar
                 src={`${API_URL}/files/rp_project/${record.id}/${value}?thumb=160x160`}
                 shape="square"
