@@ -127,6 +127,16 @@ function App() {
                     syncWithLocation: true,
                     warnWhenUnsavedChanges: true,
                     projectId: "amqAdV-ZbIs6S-5FzDUd",
+                    reactQuery: {
+                      clientConfig: {
+                        defaultOptions: {
+                          queries: {
+                            staleTime: 1000 * 5,
+                            refetchOnWindowFocus: false,
+                          },
+                        },
+                      },
+                    },
                   }}
                   resources={[
                     {

@@ -11,7 +11,7 @@ import {
 } from "@refinedev/antd";
 import { Table, Space, Tag, Button, Tooltip, Form, Select, Drawer } from "antd";
 import { GlobalOutlined, SearchOutlined, ExportOutlined } from "@ant-design/icons";
-import { useMany, useGetIdentity } from "@refinedev/core";
+import { useGetIdentity } from "@refinedev/core";
 import { useNavigate, useSearchParams } from "react-router";
 import { BASE_URL } from "../../providers/constants";
 
@@ -53,26 +53,6 @@ export const PrototypeList = () => {
     optionLabel: "name",
     optionValue: "id",
   });
-
-  const { query } = useMany({
-    resource: "rp_project",
-    ids: tableProps?.dataSource?.map((item: any) => item?.project).filter(Boolean) ?? [],
-    queryOptions: {
-      enabled: !!tableProps?.dataSource,
-    },
-  });
-  const projectData = query.data;
-  const projectIsLoading = query.isLoading;
-
-  const { query: userQuery } = useMany({
-    resource: "users",
-    ids: tableProps?.dataSource?.map((item: any) => item?.creator).filter(Boolean) ?? [],
-    queryOptions: {
-      enabled: !!tableProps?.dataSource,
-    },
-  });
-  const userData = userQuery.data;
-  const userIsLoading = userQuery.isLoading;
 
   const projectFilter = filters?.find((f: any) => f.field === "project" && f.operator === "eq");
   // 优先从 URL 的 project 参数获取，其次从 filters，最后尝试解析 filters[0][value] 这种原始 URL 结构
@@ -125,18 +105,16 @@ export const PrototypeList = () => {
         <Table.Column
           dataIndex={["project"]}
           title="所属项目"
-          render={(value) => {
-            if (projectIsLoading) return "加载中...";
-            return projectData?.data?.find((item: any) => item.id === value)?.name ?? value;
+          render={(value, record: any) => {
+            return record?.expand?.project?.name ?? value ?? "-";
           }}
         />
         <Table.Column dataIndex="remark" title="备注" />
         <Table.Column
           dataIndex="creator"
           title="创建人"
-          render={(value) => {
-            if (userIsLoading) return "加载中...";
-            return userData?.data?.find((item: any) => item.id === value)?.email || value || "-";
+          render={(value, record: any) => {
+            return record?.expand?.creator?.email || record?.expand?.creator?.name || value || "-";
           }}
         />
         <Table.Column

@@ -6,6 +6,7 @@
 # IDE & Editor files
 .vscode/
 .idea/
+.codegraph/
 *.sublime-project
 *.sublime-workspace
 
@@ -27,12 +28,15 @@ build/
 # Go / Backend
 backend/app
 backend/app.exe
+backend/main
 *.exe
 *.test
 *.prof
 
 # PocketBase data
 pb_data/
+backend/pb_data/
+backend/pb_public/projects/
 
 # Logs
 logs

@@ -16,11 +16,11 @@ export const PrototypeShow = () => {
     resource: "rp_project",
     id: record?.project || "",
     queryOptions: {
-      enabled: !!record?.project,
+      enabled: !!record?.project && !record?.expand?.project?.name,
     },
   });
-  const projectData = projectQuery.data;
-  const projectIsLoading = projectQuery.isLoading;
+  const projectName = record?.expand?.project?.name || projectQuery.data?.data?.name;
+  const projectIsLoading = !record?.expand?.project?.name && projectQuery.isLoading;
 
   return (
     <Show isLoading={isLoading}>
@@ -28,7 +28,7 @@ export const PrototypeShow = () => {
       <TextField value={record?.id} />
       
       <Title level={5}>所属项目</Title>
-      {projectIsLoading ? <span>加载中...</span> : <TextField value={projectData?.data?.name || "-"} />}
+      {projectIsLoading ? <span>加载中...</span> : <TextField value={projectName || "-"} />}
 
       <Title level={5}>版本标题</Title>
       <TextField value={record?.title} />

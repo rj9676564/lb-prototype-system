@@ -3,7 +3,7 @@ import { pb } from "../lib/pocketbase";
 import { API_URL } from "./constants";
 
 export const dataProvider: DataProvider = {
-  getList: async ({ resource, pagination, sorters, filters }) => {
+  getList: async ({ resource, pagination, sorters, filters, meta }) => {
     const { currentPage = 1, pageSize = 10 } = pagination ?? {};
     
     // 构建查询参数
@@ -11,6 +11,15 @@ export const dataProvider: DataProvider = {
       page: currentPage,
       perPage: pageSize,
     };
+
+    // 处理 expand 关联展开
+    if (meta?.expand) {
+      queryParams.expand = meta.expand;
+    } else if (resource === "rp_prototype") {
+      queryParams.expand = "project,creator";
+    } else if (resource === "rp_project") {
+      queryParams.expand = "creator";
+    }
 
     // 处理排序
     if (sorters && sorters.length > 0) {
@@ -65,8 +74,16 @@ export const dataProvider: DataProvider = {
     };
   },
 
-  getOne: async ({ resource, id }) => {
-    const record = await pb.collection(resource).getOne<any>(id as string);
+  getOne: async ({ resource, id, meta }) => {
+    const queryParams: any = {};
+    if (meta?.expand) {
+      queryParams.expand = meta.expand;
+    } else if (resource === "rp_prototype") {
+      queryParams.expand = "project,creator";
+    } else if (resource === "rp_project") {
+      queryParams.expand = "creator";
+    }
+    const record = await pb.collection(resource).getOne<any>(id as string, queryParams);
     return { data: record };
   },
 
@@ -116,10 +133,27 @@ export const dataProvider: DataProvider = {
 
   getApiUrl: () => API_URL,
   
-  getMany: async ({ resource, ids }) => {
-     // 简单实现：循环获取，或者使用 filter 语法
-     const promises = ids.map(id => pb.collection(resource).getOne<any>(id as string));
-     const results = await Promise.all(promises);
-     return { data: results };
+  getMany: async ({ resource, ids, meta }) => {
+     const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+     if (uniqueIds.length === 0) {
+       return { data: [] };
+     }
+
+     try {
+       const filter = uniqueIds.map(id => `id = "${id}"`).join(' || ');
+       const queryParams: any = {
+         filter,
+         perPage: uniqueIds.length,
+       };
+       if (meta?.expand) {
+         queryParams.expand = meta.expand;
+       }
+       const response = await pb.collection(resource).getList<any>(1, uniqueIds.length, queryParams);
+       return { data: response.items };
+     } catch {
+       const promises = uniqueIds.map(id => pb.collection(resource).getOne<any>(id as string).catch(() => null));
+       const results = await Promise.all(promises);
+       return { data: results.filter(Boolean) };
+     }
   },
 };

@@ -8,7 +8,7 @@ import {
 } from "@refinedev/antd";
 import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex, Modal } from "antd";
 import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined } from "@ant-design/icons";
-import { useMany, useGetIdentity } from "@refinedev/core";
+import { useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router";
 import { pb } from "../../lib/pocketbase";
 import { API_URL, BASE_URL } from "../../providers/constants";
@@ -52,18 +52,10 @@ export const ProjectList = () => {
     },
   });
 
-  const { query: userQuery } = useMany({
-    resource: "users",
-    ids: tableProps?.dataSource?.map((item: any) => item?.creator).filter(Boolean) ?? [],
-    queryOptions: {
-      enabled: !!tableProps?.dataSource,
-    },
-  });
-  const userData = userQuery.data;
-  const userIsLoading = userQuery.isLoading;
+  const projectIdsKey = (tableProps?.dataSource?.map((item: any) => item?.id).filter(Boolean) ?? []).join(",");
 
   React.useEffect(() => {
-    const projectIds = tableProps?.dataSource?.map((item: any) => item?.id).filter(Boolean) ?? [];
+    const projectIds = projectIdsKey ? projectIdsKey.split(",") : [];
 
     if (projectIds.length === 0) {
       setLatestPrototypeMap({});
@@ -73,33 +65,31 @@ export const ProjectList = () => {
     let cancelled = false;
 
     const loadLatestPrototypes = async () => {
-      const entries = await Promise.all(
-        projectIds.map(async (projectId: string) => {
-          try {
-            const response = await pb.collection("rp_prototype").getList<any>(1, 1, {
-              filter: `project = "${projectId}"`,
-              sort: "-created",
-            });
+      try {
+        const filter = projectIds.map((id) => `project = "${id}"`).join(" || ");
+        const response = await pb.collection("rp_prototype").getList<any>(1, 200, {
+          filter,
+          sort: "-created",
+        });
 
-            const latest = response.items?.[0];
-            return [
-              projectId,
-              latest
-                ? {
-                    title: latest.title,
-                    url: latest.url,
-                    updated: latest.updated,
-                  }
-                : {},
-            ] as const;
-          } catch {
-            return [projectId, {}] as const;
+        if (cancelled) return;
+
+        const map: Record<string, LatestPrototypeMeta> = {};
+        for (const item of response.items || []) {
+          if (item.project && !map[item.project]) {
+            map[item.project] = {
+              title: item.title,
+              url: item.url,
+              updated: item.updated,
+            };
           }
-        }),
-      );
+        }
 
-      if (!cancelled) {
-        setLatestPrototypeMap(Object.fromEntries(entries));
+        setLatestPrototypeMap(map);
+      } catch {
+        if (!cancelled) {
+          setLatestPrototypeMap({});
+        }
       }
     };
 
@@ -108,7 +98,7 @@ export const ProjectList = () => {
     return () => {
       cancelled = true;
     };
-  }, [tableProps?.dataSource]);
+  }, [projectIdsKey]);
 
   const handleScanImport = async () => {
     setSyncing(true);
@@ -201,9 +191,8 @@ export const ProjectList = () => {
         <Table.Column
           dataIndex="creator"
           title="创建人"
-          render={(value) => {
-            if (userIsLoading) return "加载中...";
-            return userData?.data?.find((item: any) => item.id === value)?.email || value || "-";
+          render={(value, record: any) => {
+            return record?.expand?.creator?.email || record?.expand?.creator?.name || value || "-";
           }}
         />
         <Table.Column

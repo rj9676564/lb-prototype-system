@@ -24,9 +24,9 @@ import (
 )
 
 const (
-	autoVersionTitle = "当前版本"
-	autoSourcePrefix = "[AUTO_SOURCE]"
-	mappingFileName = "prototype_scan_mapping.json"
+	autoVersionTitle    = "当前版本"
+	autoSourcePrefix    = "[AUTO_SOURCE]"
+	mappingFileName     = "prototype_scan_mapping.json"
 	defaultCreatorEmail = "admin@example.com"
 )
 
@@ -58,6 +58,16 @@ func main() {
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		staticHandler := apis.Static(os.DirFS("./pb_public"), false)
 		sourceDir := strings.TrimSpace(os.Getenv("PROTOTYPE_SOURCE_DIR"))
+
+		// 对响应体启用 gzip：原型目录里大量的 HTML/JS/CSS 通常能压掉 70% 以上。
+		// 小于 1KB 的响应压缩后反而可能变大，直接跳过。
+		gzipHandler := apis.GzipWithConfig(apis.GzipConfig{MinLength: 1024})
+		se.Router.BindFunc(func(e *core.RequestEvent) error {
+			if isPrecompressedPath(e.Request.URL.Path) {
+				return e.Next()
+			}
+			return gzipHandler.Func(e)
+		})
 
 		if sourceDir != "" {
 			se.Router.GET("/linked-projects/{path...}", func(e *core.RequestEvent) error {
@@ -400,7 +410,7 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 	}
 
 	sort.Strings(summary.SkippedPaths)
-	log.Printf("[Scanner] === 同步全部完成。扫描发现项目数: %d, 成功同步项目数: %d, 新增项目数: %d, 更新项目数: %d ===", 
+	log.Printf("[Scanner] === 同步全部完成。扫描发现项目数: %d, 成功同步项目数: %d, 新增项目数: %d, 更新项目数: %d ===",
 		summary.ScannedProjects, summary.SyncedProjects, summary.CreatedProjects, summary.UpdatedProjects)
 
 	return summary, nil
@@ -709,6 +719,29 @@ func shouldServeSPAIndex(requestPath string) bool {
 	return filepath.Ext(cleaned) == ""
 }
 
+// precompressedExts 里的格式本身已经是压缩过的，再走一遍 gzip 只会白费 CPU，体积几乎不变。
+var precompressedExts = map[string]bool{
+	".png":   true,
+	".jpg":   true,
+	".jpeg":  true,
+	".gif":   true,
+	".webp":  true,
+	".avif":  true,
+	".mp4":   true,
+	".webm":  true,
+	".mp3":   true,
+	".woff":  true,
+	".woff2": true,
+	".zip":   true,
+	".gz":    true,
+	".br":    true,
+	".pdf":   true,
+}
+
+func isPrecompressedPath(requestPath string) bool {
+	return precompressedExts[strings.ToLower(filepath.Ext(requestPath))]
+}
+
 func loadScanMapping(app core.App) (*scanMapping, error) {
 	path := filepath.Join(app.DataDir(), mappingFileName)
 	data, err := os.ReadFile(path)
@@ -785,7 +818,7 @@ func unzip(src string, dest string) error {
 		// --- 💡 核心修复：处理中文乱码或非法字节序列 ---
 		fileName := decodeZipName(f.Name)
 		fpath := filepath.Join(dest, fileName)
-		
+
 		if f.FileInfo().IsDir() {
 			os.MkdirAll(fpath, os.ModePerm)
 			continue

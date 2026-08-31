@@ -65,3 +65,22 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  cleanup-go-cache:
+    needs: build-and-push-image
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Keep only the latest Go dependency cache
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          cache_ids=$(gh cache list --key "setup-go-" --limit 100 --json id,createdAt --jq 'sort_by(.createdAt) | reverse | .[1:][] | .id')
+
+          for cache_id in $cache_ids; do
+            echo "Deleting stale Go cache: $cache_id"
+            gh cache delete "$cache_id"
+          done
