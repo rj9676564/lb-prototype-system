@@ -63,7 +63,7 @@ jobs:
         if: steps.filter.outputs.frontend == 'true' || steps.dist-cache.outputs.cache-hit != 'true' || github.event.inputs.force_build_frontend == 'true'
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: 'pnpm'
           cache-dependency-path: 'frontend/pnpm-lock.yaml'
 
