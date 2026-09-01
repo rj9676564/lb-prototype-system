@@ -63,7 +63,17 @@ func main() {
 		// 小于 1KB 的响应压缩后反而可能变大，直接跳过。
 		gzipHandler := apis.GzipWithConfig(apis.GzipConfig{MinLength: 1024})
 		se.Router.BindFunc(func(e *core.RequestEvent) error {
-			if isPrecompressedPath(e.Request.URL.Path) {
+			reqPath := e.Request.URL.Path
+
+			// 前端强缓存：对 /api/files/（文件/封面/缩略图）启用 30 天浏览器本地强缓存
+			if strings.HasPrefix(reqPath, "/api/files/") {
+				e.Response.Header().Set("Cache-Control", "public, max-age=2592000, immutable")
+			} else if strings.HasPrefix(reqPath, "/assets/") {
+				// 前端强缓存：对 Vite 打包静态资源（带有 hash）启用 1 年强缓存
+				e.Response.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+			}
+
+			if isPrecompressedPath(reqPath) {
 				return e.Next()
 			}
 			return gzipHandler.Func(e)
@@ -77,8 +87,15 @@ func main() {
 
 				e.Response.Header().Del("X-Frame-Options")
 				e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
-				// 启用协商缓存：允许浏览器缓存资源以提升加载速度，但每次使用缓存前必须向服务器验证以确保内容是最新的
-				e.Response.Header().Set("Cache-Control", "no-cache, must-revalidate")
+
+				ext := strings.ToLower(filepath.Ext(e.Request.URL.Path))
+				if isRasterImage(ext) {
+					// 原型内的图片资源启用前端强缓存
+					e.Response.Header().Set("Cache-Control", "public, max-age=604800")
+				} else {
+					// HTML/JS/CSS 等代码文件启用协商缓存
+					e.Response.Header().Set("Cache-Control", "no-cache, must-revalidate")
+				}
 
 				return apis.Static(os.DirFS(sourceDir), false)(e)
 			})
@@ -111,8 +128,14 @@ func main() {
 			e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
 
 			requestPath := e.Request.PathValue(apis.StaticWildcardParam)
-			if strings.HasPrefix(strings.TrimPrefix(requestPath, "/"), "projects/") {
-				// 启用协商缓存：允许浏览器缓存资源以提升加载速度，但每次使用缓存前必须向服务器验证以确保内容是最新的
+			cleanPath := strings.TrimPrefix(requestPath, "/")
+
+			ext := strings.ToLower(filepath.Ext(cleanPath))
+			if isRasterImage(ext) {
+				// 图片静态资源启用前端强缓存（7天）
+				e.Response.Header().Set("Cache-Control", "public, max-age=604800")
+			} else if strings.HasPrefix(cleanPath, "projects/") {
+				// 原型项目的 HTML/JS 代码启用协商缓存
 				e.Response.Header().Set("Cache-Control", "no-cache, must-revalidate")
 			}
 
@@ -655,13 +678,17 @@ func findFirstImagePath(dir string) (string, error) {
 	return "", nil
 }
 
-func isSupportedProjectImage(name string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".jpg", ".jpeg", ".png", ".webp", ".gif":
+func isRasterImage(ext string) bool {
+	switch strings.ToLower(ext) {
+	case ".jpg", ".jpeg", ".png", ".webp", ".gif", ".ico":
 		return true
 	default:
 		return false
 	}
+}
+
+func isSupportedProjectImage(name string) bool {
+	return isRasterImage(filepath.Ext(name))
 }
 
 func containsIndexHTML(dir string) (bool, error) {
