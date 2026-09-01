@@ -70,9 +70,18 @@ jobs:
       - name: Build frontend
         if: steps.filter.outputs.frontend == 'true' || steps.dist-cache.outputs.cache-hit != 'true' || github.event.inputs.force_build_frontend == 'true'
         working-directory: ./frontend
+        env:
+          VITE_CDN_URL: https://rj9676564.github.io/lb-prototype-system/
         run: |
           pnpm install --frozen-lockfile
           pnpm run build
+
+      - name: Deploy static assets to GitHub Pages CDN
+        if: steps.filter.outputs.frontend == 'true' || steps.dist-cache.outputs.cache-hit != 'true' || github.event.inputs.force_build_frontend == 'true'
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./frontend/dist
 
       - name: Ensure frontend dist directory exists
         run: mkdir -p frontend/dist
