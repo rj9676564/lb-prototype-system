@@ -24,6 +24,8 @@ export const dataProvider: DataProvider = {
     // 处理排序
     if (sorters && sorters.length > 0) {
       queryParams.sort = sorters.map(s => `${s.order === 'desc' ? '-' : ''}${s.field}`).join(',');
+    } else if (resource === "rp_project") {
+      queryParams.sort = "-folder_time";
     }
 
     // 处理过滤
