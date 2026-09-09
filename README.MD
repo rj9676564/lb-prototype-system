@@ -88,6 +88,10 @@ PROTOTYPE_SOURCE_DIR=/Users/laibin/Documents/shopkeeper \
 
 部署时推荐直接使用已发布镜像，不需要再单独部署前端容器。
 
+- **镜像地址**：`ghcr.io/rj9676564/lb-prototype-system-backend`
+- **镜像仓库与版本列表**：[GitHub Packages (GHCR)](https://github.com/rj9676564/lb-prototype-system/pkgs/container/lb-prototype-system-backend)
+- **CI/CD 构建记录**：[GitHub Actions](https://github.com/rj9676564/lb-prototype-system/actions)
+
 ### 推荐方式：直接拉取镜像
 
 ```yaml
@@ -95,7 +99,7 @@ version: '3.8'
 
 services:
   app:
-    image: ghcr.io/rj9676564/lb-prototype-system-backend:1.0.8
+    image: ghcr.io/rj9676564/lb-prototype-system-backend:1.0.25
     container_name: prototype-app
     restart: unless-stopped
     ports:
@@ -184,12 +188,12 @@ services:
 - 遇到代理同步问题时，优先测试：
 
 ```bash
-docker pull ghcr.io/rj9676564/lb-prototype-system-backend:1.0.8
+docker pull ghcr.io/rj9676564/lb-prototype-system-backend:1.0.25
 ```
 
 ## CI/CD
 
-镜像由 `.github/workflows/backend.yml` 统一构建并发布。
+镜像由 `.github/workflows/backend.yml` 统一构建并自动发布至 [GitHub Container Registry (GHCR)](https://github.com/rj9676564/lb-prototype-system/pkgs/container/lb-prototype-system-backend)。
 
 发布逻辑：
 
@@ -201,15 +205,15 @@ docker pull ghcr.io/rj9676564/lb-prototype-system-backend:1.0.8
 触发发布：
 
 ```bash
-git tag b1.0.8
-git push origin b1.0.8
+git tag b1.0.25
+git push origin b1.0.25
 ```
 
 说明：
 
 - Git tag 以 `b` 开头
-- 例如仓库 tag 是 `b1.0.8`
-- 最终镜像 tag 会发布为 `1.0.8`
+- 例如仓库 tag 是 `b1.0.25`
+- 最终镜像 tag 会发布为 `1.0.25`
 
 ## 技术栈
 
