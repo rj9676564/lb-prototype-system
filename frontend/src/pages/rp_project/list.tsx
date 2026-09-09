@@ -29,7 +29,7 @@ export const ProjectList = () => {
   const [latestPrototypeMap, setLatestPrototypeMap] = React.useState<Record<string, LatestPrototypeMeta>>({});
 
   const { tableProps, searchFormProps, tableQuery } = useTable({
-    syncWithLocation: true,
+    syncWithLocation: false,
     pagination: {
       pageSize: 50,
     },
@@ -198,6 +198,8 @@ export const ProjectList = () => {
         <Table.Column
           dataIndex="folder_time"
           title="文件夹时间"
+          defaultSortOrder="descend"
+          sortDirections={["descend", "ascend", "descend"]}
           sorter
           render={(value, record: any) => {
             const timeVal = value || record.created;

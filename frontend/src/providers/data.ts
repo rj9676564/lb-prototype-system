@@ -23,7 +23,10 @@ export const dataProvider: DataProvider = {
 
     // 处理排序
     if (sorters && sorters.length > 0) {
-      queryParams.sort = sorters.map(s => `${s.order === 'desc' ? '-' : ''}${s.field}`).join(',');
+      queryParams.sort = sorters.map(s => {
+        const field = (resource === "rp_project" && s.field === "created") ? "folder_time" : s.field;
+        return `${s.order === 'desc' ? '-' : ''}${field}`;
+      }).join(',');
     } else if (resource === "rp_project") {
       queryParams.sort = "-folder_time";
     }
