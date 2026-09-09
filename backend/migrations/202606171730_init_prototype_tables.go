@@ -127,6 +127,9 @@ func ensureProjectCollection(app core.App) error {
 			Required:     true,
 			MaxSelect:    1,
 		},
+		&core.DateField{
+			Name: "folder_time",
+		},
 		&core.AutodateField{
 			Name:     "created",
 			OnCreate: true,

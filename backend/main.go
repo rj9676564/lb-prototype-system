@@ -10,8 +10,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	_ "awesomeProject/migrations"
@@ -20,6 +23,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
 	"github.com/pocketbase/pocketbase/tools/filesystem"
+	"github.com/pocketbase/pocketbase/tools/types"
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
@@ -228,6 +232,17 @@ func main() {
 			}
 		}
 
+		if projectId := e.Record.GetString("project"); projectId != "" {
+			if projRecord, err := e.App.FindRecordById("rp_project", projectId); err == nil {
+				if projRecord.GetDateTime("folder_time").IsZero() || !isAutoPrototypeRecord(e.Record) {
+					projRecord.Set("folder_time", types.NowDateTime())
+					if err := e.App.Save(projRecord); err != nil {
+						log.Printf("更新项目 folder_time 失败 [%s]: %v", projectId, err)
+					}
+				}
+			}
+		}
+
 		go func(app core.App, record *core.Record) {
 			log.Println("[后台任务] 开始异步处理流程...")
 			if err := recalculateDiffForRecord(app, record); err != nil {
@@ -239,6 +254,13 @@ func main() {
 
 		return nil
 	}
+
+	app.OnRecordCreate("rp_project").BindFunc(func(e *core.RecordEvent) error {
+		if e.Record.GetDateTime("folder_time").IsZero() {
+			e.Record.Set("folder_time", types.NowDateTime())
+		}
+		return e.Next()
+	})
 
 	app.OnRecordAfterCreateSuccess().BindFunc(hookFunc)
 	app.OnRecordAfterUpdateSuccess().BindFunc(hookFunc)
@@ -505,8 +527,151 @@ func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
 		}
 	}
 
-	sort.Strings(paths)
+	sort.Slice(paths, func(i, j int) bool {
+		timeI := resolveFolderTime(sourceDir, paths[i])
+		timeJ := resolveFolderTime(sourceDir, paths[j])
+		if timeI.Equal(timeJ) {
+			return paths[i] < paths[j]
+		}
+		return timeI.After(timeJ)
+	})
 	return paths, skipped, nil
+}
+
+var (
+	// 1. 包含分隔符的年月日: 2026年9月15日, 2026-09-15, 2026.9.5, 2026_09_15
+	reFullDate = regexp.MustCompile(`(?i)(20\d{2})[-_./年\s](1[0-2]|0?[1-9])[-_./月\s](3[01]|[12]\d|0?[1-9])[日号\s]?`)
+
+	// 2. 紧凑8位日期: 20260915
+	reCompact8Date = regexp.MustCompile(`(?:^|[^\d])(20\d{2})(1[0-2]|0[1-9])(3[01]|[12]\d|0[1-9])(?:[^\d]|$)`)
+
+	// 3. 年月格式: 2026年9月, 2026年10月, 2026-11, 2026.12, 2026_09
+	reYearMonth = regexp.MustCompile(`(?i)(20\d{2})[-_./年\s](1[0-2]|0?[1-9])(?:月)?`)
+
+	// 4. 紧凑6位年月: 202611
+	reCompact6YearMonth = regexp.MustCompile(`(?:^|[^\d])(20\d{2})(1[0-2]|0[1-9])(?:[^\d]|$)`)
+
+	// 5. 月日格式: 9月15日, 11-15, 12.15
+	reMonthDay = regexp.MustCompile(`(?i)(?:^|[^v\d])(1[0-2]|0?[1-9])[-_./月\s](3[01]|[12]\d|0?[1-9])[日号\s]?`)
+
+	// 6. 仅含日: 15日, 15号
+	reDay = regexp.MustCompile(`(?:^|[^\d])(3[01]|[12]\d|0?[1-9])[日号]`)
+
+	// 7. 仅含月: 1月, 10月, 11月, 12月
+	reMonthOnly = regexp.MustCompile(`(?:^|[^\d])(1[0-2]|0?[1-9])月`)
+
+	// 8. 仅含年: 2026年
+	reYearOnly = regexp.MustCompile(`(?i)(20\d{2})年`)
+)
+
+func resolveFolderTime(sourceDir string, relPath string) time.Time {
+	projectDir := filepath.Join(sourceDir, filepath.FromSlash(relPath))
+	fsModTime := getDirectoryModTime(projectDir)
+	return extractTimeFromPath(relPath, fsModTime)
+}
+
+func extractTimeFromPath(relPath string, fallback time.Time) time.Time {
+	normPath := filepath.ToSlash(relPath)
+	var year, month, day int
+
+	// 优先匹配完整的年月日
+	if m := reFullDate.FindStringSubmatch(normPath); len(m) == 4 {
+		year, _ = strconv.Atoi(m[1])
+		month, _ = strconv.Atoi(m[2])
+		day, _ = strconv.Atoi(m[3])
+	} else if m := reCompact8Date.FindStringSubmatch(normPath); len(m) == 4 {
+		year, _ = strconv.Atoi(m[1])
+		month, _ = strconv.Atoi(m[2])
+		day, _ = strconv.Atoi(m[3])
+	} else {
+		// 匹配年月
+		if m := reYearMonth.FindStringSubmatch(normPath); len(m) == 3 {
+			year, _ = strconv.Atoi(m[1])
+			month, _ = strconv.Atoi(m[2])
+		} else if m := reCompact6YearMonth.FindStringSubmatch(normPath); len(m) == 3 {
+			year, _ = strconv.Atoi(m[1])
+			month, _ = strconv.Atoi(m[2])
+		} else if m := reYearOnly.FindStringSubmatch(normPath); len(m) == 2 {
+			year, _ = strconv.Atoi(m[1])
+		}
+
+		// 检查是否有更具体的月日或日
+		if m := reMonthDay.FindStringSubmatch(normPath); len(m) == 3 {
+			if month == 0 {
+				month, _ = strconv.Atoi(m[1])
+			}
+			day, _ = strconv.Atoi(m[2])
+		} else if m := reDay.FindStringSubmatch(normPath); len(m) == 2 {
+			day, _ = strconv.Atoi(m[1])
+		} else if month == 0 {
+			if m := reMonthOnly.FindStringSubmatch(normPath); len(m) == 2 {
+				month, _ = strconv.Atoi(m[1])
+			}
+		}
+	}
+
+	// 如果路径中没有任何时间特征，回退到文件系统修改时间
+	if year == 0 && month == 0 && day == 0 {
+		if fallback.IsZero() {
+			return time.Now()
+		}
+		return fallback
+	}
+
+	refTime := fallback
+	if refTime.IsZero() {
+		refTime = time.Now()
+	}
+
+	if year == 0 {
+		year = refTime.Year()
+	}
+	if month == 0 {
+		month = int(refTime.Month())
+	}
+
+	if day == 0 {
+		maxDays := daysInMonth(year, time.Month(month))
+		d := refTime.Day()
+		if d > maxDays {
+			d = maxDays
+		}
+		if d < 1 {
+			d = 1
+		}
+		day = d
+	}
+
+	hour, min, sec := refTime.Hour(), refTime.Minute(), refTime.Second()
+	nsec := refTime.Nanosecond()
+
+	return time.Date(year, time.Month(month), day, hour, min, sec, nsec, time.UTC)
+}
+
+func daysInMonth(year int, month time.Month) int {
+	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
+}
+
+func getDirectoryModTime(dirPath string) time.Time {
+	info, err := os.Stat(dirPath)
+	if err != nil {
+		return time.Now()
+	}
+	latest := info.ModTime()
+
+	entries, err := os.ReadDir(dirPath)
+	if err == nil {
+		for _, entry := range entries {
+			if isHiddenName(entry.Name()) {
+				continue
+			}
+			entryInfo, err := entry.Info()
+			if err == nil && entryInfo.ModTime().After(latest) {
+				latest = entryInfo.ModTime()
+			}
+		}
+	}
+	return latest
 }
 
 func ensureProjectRecord(app core.App, collection *core.Collection, mapping *scanMapping, sourceDir string, relPath string, displayName string, creatorID string) (*core.Record, bool, error) {
@@ -551,6 +716,9 @@ func applyProjectFields(record *core.Record, sourceDir string, relPath string, d
 	setFieldIfExists(record, "name", displayName)
 	setFieldIfExists(record, "description", autoDescription(relPath))
 	setFieldIfExists(record, "creator", creatorID)
+
+	folderTime := resolveFolderTime(sourceDir, relPath)
+	setFieldIfExists(record, "folder_time", folderTime)
 
 	coverFile, err := resolveProjectCoverFile(sourceDir, relPath)
 	if err != nil {

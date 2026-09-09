@@ -36,7 +36,7 @@ export const ProjectList = () => {
     sorters: {
       initial: [
         {
-          field: "created",
+          field: "folder_time",
           order: "desc",
         },
       ],
@@ -196,8 +196,18 @@ export const ProjectList = () => {
           }}
         />
         <Table.Column
+          dataIndex="folder_time"
+          title="文件夹时间"
+          sorter
+          render={(value, record: any) => {
+            const timeVal = value || record.created;
+            return <DateField format="YYYY-MM-DD HH:mm:ss" value={timeVal} />;
+          }}
+        />
+        <Table.Column
           dataIndex="created"
           title="创建时间"
+          sorter
           render={(value) => <DateField format="YYYY-MM-DD HH:mm:ss" value={value} />}
         />
         <Table.Column

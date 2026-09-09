@@ -32,6 +32,8 @@ export const ProjectShow = () => {
       <TextField value={record?.name} />
       <Title level={5}>描述</Title>
       <TextField value={record?.description} />
+      <Title level={5}>文件夹时间</Title>
+      <DateField format="YYYY-MM-DD HH:mm:ss" value={record?.folder_time || record?.created} />
       <Title level={5}>创建时间</Title>
       <DateField format="YYYY-MM-DD HH:mm:ss" value={record?.created} />
     </Show>
