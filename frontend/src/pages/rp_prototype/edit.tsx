@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { Edit, useForm, useSelect } from "@refinedev/antd";
+import { useInvalidate } from "@refinedev/core";
 import { Form, Input, Select, Upload, Button, Segmented, Space, Typography, Alert, message } from "antd";
 import { FolderOpenOutlined, FileZipOutlined, InboxOutlined } from "@ant-design/icons";
 import JSZip from "jszip";
@@ -11,6 +12,7 @@ export const PrototypeEdit = () => {
   const { formProps, saveButtonProps, query } = useForm<any>();
   const prototypeData = query?.data?.data;
   const [messageApi, contextHolder] = message.useMessage();
+  const invalidate = useInvalidate();
 
   const [uploadMode, setUploadMode] = useState<"folder" | "zip">("folder");
   const [folderFiles, setFolderFiles] = useState<any[]>([]);
@@ -53,6 +55,9 @@ export const PrototypeEdit = () => {
       if (formProps.onFinish) {
         await formProps.onFinish(formData as any);
       }
+
+      invalidate({ resource: "rp_project", invalidates: ["list", "many", "detail"] });
+      invalidate({ resource: "rp_prototype", invalidates: ["list", "many", "detail"] });
     } catch (err: any) {
       messageApi.error("保存失败: " + (err?.message || "未知错误"));
     } finally {

@@ -1,8 +1,9 @@
 import React, { useState } from "react";
 import { Create, useForm, useSelect } from "@refinedev/antd";
+import { useInvalidate } from "@refinedev/core";
 import { Form, Input, Select, Upload, Button, Segmented, Space, Typography, Alert, message } from "antd";
 import { FolderOpenOutlined, FileZipOutlined, InboxOutlined } from "@ant-design/icons";
-import { useSearchParams } from "react-router";
+import { useSearchParams, useNavigate } from "react-router";
 import JSZip from "jszip";
 
 const { Text } = Typography;
@@ -11,8 +12,12 @@ export const PrototypeCreate = () => {
   const [searchParams] = useSearchParams();
   const projectIdFromUrl = searchParams.get("project");
   const [messageApi, contextHolder] = message.useMessage();
+  const invalidate = useInvalidate();
+  const navigate = useNavigate();
 
-  const { formProps, saveButtonProps, form } = useForm<any>();
+  const { formProps, saveButtonProps, form } = useForm<any>({
+    redirect: false,
+  });
   const [uploadMode, setUploadMode] = useState<"folder" | "zip">("folder");
   const [folderFiles, setFolderFiles] = useState<any[]>([]);
   const [zipFiles, setZipFiles] = useState<any[]>([]);
@@ -74,6 +79,15 @@ export const PrototypeCreate = () => {
       if (formProps.onFinish) {
         await formProps.onFinish(formData as any);
       }
+
+      // 级联刷新项目列表和版本列表缓存
+      invalidate({ resource: "rp_project", invalidates: ["list", "many", "detail"] });
+      invalidate({ resource: "rp_prototype", invalidates: ["list", "many", "detail"] });
+
+      messageApi.success("版本创建成功！正在返回并刷新项目列表...");
+      setTimeout(() => {
+        navigate("/rp_project");
+      }, 600);
     } catch (err: any) {
       messageApi.error("提交失败: " + (err?.message || "未知错误"));
     } finally {

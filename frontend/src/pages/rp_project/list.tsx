@@ -7,7 +7,7 @@ import {
   DateField,
 } from "@refinedev/antd";
 import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex, Modal } from "antd";
-import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined } from "@ant-design/icons";
+import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined, PlusOutlined } from "@ant-design/icons";
 import { useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router";
 import { pb } from "../../lib/pocketbase";
@@ -236,6 +236,14 @@ export const ProjectList = () => {
                 >
                   查看版本
                 </Button>
+                <Tooltip title="为此项目新建/上传版本">
+                  <Button
+                    icon={<PlusOutlined />}
+                    onClick={() => navigate(`/rp_prototype/create?project=${record.id}`)}
+                  >
+                    新建版本
+                  </Button>
+                </Tooltip>
                 {isCreator && (
                   <>
                     <EditButton hideText recordItemId={record.id} />
