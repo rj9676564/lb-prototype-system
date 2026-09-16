@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
@@ -225,40 +226,83 @@ func main() {
 			return nil
 		}
 
-		destDir := filepath.Join("pb_public", "projects", recordId)
+		sourceDir := getEffectiveSourceDir()
+		if sourceDir != "" {
+			tryGitPull(sourceDir)
 
-		os.RemoveAll(destDir)
-		os.MkdirAll(destDir, os.ModePerm)
-		log.Println("准备解压到文件夹:", destDir)
+			projectName := "默认项目"
+			if projectId := e.Record.GetString("project"); projectId != "" {
+				if projRecord, err := e.App.FindRecordById("rp_project", projectId); err == nil {
+					if name := strings.TrimSpace(projRecord.GetString("name")); name != "" {
+						projectName = name
+					}
+				}
+			}
 
-		if err := unzip(zipPath, destDir); err != nil {
-			log.Println("解压失败:", err)
-			return nil
-		}
-		log.Println("解压成功！")
+			versionTitle := strings.TrimSpace(e.Record.GetString("title"))
+			if versionTitle == "" {
+				versionTitle = "未命名版本"
+			}
 
-		// 5. 动态寻找 index.html
-		foundIndexPath := ""
-		filepath.Walk(destDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || strings.ToLower(info.Name()) != "index.html" {
+			now := time.Now()
+			yearMonth := fmt.Sprintf("%d年%d月", now.Year(), int(now.Month()))
+			cleanProject := sanitizePathComponent(projectName)
+			cleanVersion := sanitizePathComponent(versionTitle)
+
+			targetRelDir := filepath.Join(yearMonth, cleanProject, cleanVersion)
+			targetDir := filepath.Join(sourceDir, filepath.FromSlash(targetRelDir))
+
+			os.RemoveAll(targetDir)
+			if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
+				log.Printf("创建目标目录失败 [%s]: %v", targetDir, err)
+			} else if err := unzip(zipPath, targetDir); err != nil {
+				log.Printf("解压到目标目录失败 [%s]: %v", targetDir, err)
+			} else {
+				log.Printf("成功解压原型到 Git 目录: %s", targetDir)
+
+				entryFile := resolvePrototypeEntryHTML(targetDir)
+				linkedUrl := "/linked-projects/" + filepath.ToSlash(targetRelDir) + "/" + entryFile
+
+				if e.Record.GetString("url") != linkedUrl {
+					e.Record.Set("url", linkedUrl)
+					e.Record.Set("skip_diff_hook", true)
+					if err := e.App.Save(e.Record); err != nil {
+						log.Println("更新 url 字段失败:", err)
+					} else {
+						log.Println("更新 url 字段成功:", linkedUrl)
+					}
+				}
+
+				go func() {
+					if err := tryGitCommitAndPush(sourceDir, targetRelDir, projectName, versionTitle); err != nil {
+						log.Printf("[Git] 自动提交推送失败: %v", err)
+					}
+				}()
+			}
+		} else {
+			destDir := filepath.Join("pb_public", "projects", recordId)
+
+			os.RemoveAll(destDir)
+			os.MkdirAll(destDir, os.ModePerm)
+			log.Println("准备解压到文件夹:", destDir)
+
+			if err := unzip(zipPath, destDir); err != nil {
+				log.Println("解压失败:", err)
 				return nil
 			}
-			relPath, _ := filepath.Rel("pb_public", path)
-			foundIndexPath = "/" + filepath.ToSlash(relPath)
-			return filepath.SkipAll
-		})
+			log.Println("解压成功！")
 
-		if foundIndexPath == "" {
-			foundIndexPath = "/projects/" + recordId + "/index.html"
-		}
+			entryFile := resolvePrototypeEntryHTML(destDir)
+			foundIndexPath := "/projects/" + recordId + "/" + entryFile
 
-		if e.Record.GetString("url") != foundIndexPath {
-			e.Record.Set("url", foundIndexPath)
-			e.Record.Set("skip_diff_hook", true)
-			if err := e.App.Save(e.Record); err != nil {
-				log.Println("更新 url 字段失败:", err)
-			} else {
-				log.Println("更新 url 字段成功:", foundIndexPath)
+			if e.Record.GetString("url") != foundIndexPath {
+				e.Record.Set("url", foundIndexPath)
+				e.Record.Set("skip_diff_hook", true)
+				if err := e.App.Save(e.Record); err != nil {
+					log.Println("更新 url 字段失败:", err)
+				} else {
+					log.Println("更新 url 字段成功:", foundIndexPath)
+				}
 			}
 		}
 
@@ -340,6 +384,30 @@ func main() {
 	}
 }
 
+// resolvePhysicalDirectoryForPrototype: 解析版本记录对应的物理目录路径（支持 linked-projects 与 pb_public）
+func resolvePhysicalDirectoryForPrototype(record *core.Record) string {
+	url := record.GetString("url")
+	if strings.HasPrefix(url, "/linked-projects/") {
+		sourceDir := getEffectiveSourceDir()
+		if sourceDir != "" {
+			rel := strings.TrimPrefix(url, "/linked-projects/")
+			full := filepath.Join(sourceDir, filepath.FromSlash(rel))
+			if info, err := os.Stat(full); err == nil {
+				if info.IsDir() {
+					return full
+				}
+				return filepath.Dir(full)
+			}
+			return filepath.Dir(full)
+		}
+	}
+	destDir := filepath.Join("pb_public", "projects", record.Id)
+	if _, err := os.Stat(destDir); err == nil {
+		return destDir
+	}
+	return ""
+}
+
 // recalculateDiffForRecord : 辅助函数：负责为传入的 currentRecord 寻找其历史前任，并计算和保存 Diff
 func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 	projectId := currentRecord.GetString("project")
@@ -348,10 +416,13 @@ func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 	}
 
 	recordId := currentRecord.Id
-	destDir := filepath.Join("pb_public", "projects", recordId)
+	destDir := resolvePhysicalDirectoryForPrototype(currentRecord)
+	if destDir == "" {
+		destDir = filepath.Join("pb_public", "projects", recordId)
+	}
 	var oldDestDir string
 
-	log.Printf("所属项目 ID: %s，正在为 %s 查找历史版本...", projectId, recordId)
+	log.Printf("所属项目 ID: %s，正在为 %s 查找历史版本 (当前目录: %s)...", projectId, recordId, destDir)
 
 	// 查找该项目下，创建时间早于当前记录的最新一条数据
 	prevRecords, err := app.FindRecordsByFilter(
@@ -369,14 +440,14 @@ func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 
 	if err == nil && len(prevRecords) > 0 {
 		oldRecord := prevRecords[0]
-		oldDestDir = filepath.Join("pb_public", "projects", oldRecord.Id)
+		oldDestDir = resolvePhysicalDirectoryForPrototype(oldRecord)
 		log.Printf("找到上一个版本，记录 ID: %s, 文件夹路径: %s", oldRecord.Id, oldDestDir)
 	} else {
 		log.Println("未找到该项目的上个版本记录，当前记录将作为初始版本。")
 	}
 
 	var diffJsonStr string
-	if oldDestDir != "" {
+	if oldDestDir != "" && destDir != "" {
 		if _, err := os.Stat(oldDestDir); err == nil {
 			log.Println("开始跨纪录比对 HTML 纯文本差异...")
 			diffJsonStr, _ = CompareAndSaveDiff(oldDestDir, destDir)
@@ -393,6 +464,76 @@ func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 	// 在钩子上半部分拦截它，这样存入 diff 后就不会再次触发 Diff 计算了。
 	currentRecord.Set("skip_diff_hook", true)
 	return app.Save(currentRecord)
+}
+
+func tryGitCommitAndPush(sourceDir string, targetRelDir string, projectName string, versionTitle string) error {
+	gitDir := filepath.Join(sourceDir, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		log.Printf("[Git] 源目录 %s 不是 Git 仓库，跳过 Git 提交", sourceDir)
+		return nil
+	}
+
+	log.Printf("[Git] 准备提交并推送新版本到 Git 仓库: %s (目录: %s)", sourceDir, targetRelDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// 1. git add
+	cmdAdd := exec.CommandContext(ctx, "git", "-C", sourceDir, "add", "-A", filepath.ToSlash(targetRelDir))
+	cmdAdd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmdAdd.CombinedOutput(); err != nil {
+		log.Printf("[Git] git add 失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git add failed: %w", err)
+	}
+
+	// 2. git commit
+	commitMsg := fmt.Sprintf("docs(prototype): 上传 [%s] - [%s]", projectName, versionTitle)
+	cmdCommit := exec.CommandContext(ctx, "git", "-C", sourceDir, "commit", "-m", commitMsg)
+	cmdCommit.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmdCommit.CombinedOutput(); err != nil {
+		outStr := strings.TrimSpace(string(out))
+		if strings.Contains(outStr, "nothing to commit") || strings.Contains(outStr, "无文件要提交") || strings.Contains(outStr, "clean") {
+			log.Printf("[Git] 没有新的文件变动需要提交: %s", outStr)
+		} else {
+			log.Printf("[Git] git commit 失败: %v, 输出: %s", err, outStr)
+			return fmt.Errorf("git commit failed: %w", err)
+		}
+	} else {
+		log.Printf("[Git] git commit 成功: %s", strings.TrimSpace(string(out)))
+	}
+
+	// 3. 获取当前分支并 git push
+	branchCmd := exec.CommandContext(ctx, "git", "-C", sourceDir, "rev-parse", "--abbrev-ref", "HEAD")
+	branchCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	branchOut, err := branchCmd.Output()
+	branch := "main"
+	if err == nil && len(branchOut) > 0 {
+		branch = strings.TrimSpace(string(branchOut))
+	}
+
+	cmdPush := exec.CommandContext(ctx, "git", "-C", sourceDir, "push", "origin", branch)
+	cmdPush.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmdPush.CombinedOutput(); err != nil {
+		log.Printf("[Git] git push origin %s 失败: %v, 输出: %s", branch, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git push failed: %w", err)
+	} else {
+		log.Printf("[Git] git push origin %s 成功: %s", branch, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+func sanitizePathComponent(name string) string {
+	invalidChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
+	result := strings.TrimSpace(name)
+	for _, char := range invalidChars {
+		result = strings.ReplaceAll(result, char, "_")
+	}
+	result = strings.Trim(result, ". ")
+	if result == "" {
+		result = "unnamed"
+	}
+	return result
 }
 
 func tryGitPull(sourceDir string) {
