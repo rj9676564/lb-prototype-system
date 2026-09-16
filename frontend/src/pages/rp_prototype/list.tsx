@@ -9,8 +9,8 @@ import {
   useSelect,
   CreateButton,
 } from "@refinedev/antd";
-import { Table, Space, Tag, Button, Tooltip, Form, Select, Drawer } from "antd";
-import { GlobalOutlined, SearchOutlined, ExportOutlined } from "@ant-design/icons";
+import { Table, Space, Tag, Button, Tooltip, Form, Select, Drawer, Flex, Divider, Typography } from "antd";
+import { GlobalOutlined, SearchOutlined, ExportOutlined, EyeOutlined, ProjectOutlined } from "@ant-design/icons";
 import { useGetIdentity } from "@refinedev/core";
 import { useNavigate, useSearchParams } from "react-router";
 import { BASE_URL } from "../../providers/constants";
@@ -96,11 +96,44 @@ export const PrototypeList = () => {
         </Button>
       </Form>
       <Table {...tableProps} rowKey="id">
-        <Table.Column dataIndex="title" title="版本标题" />
+        <Table.Column
+          dataIndex="title"
+          title="版本标题"
+          width={340}
+          render={(value, record: any) => (
+            <Typography.Link
+              style={{
+                whiteSpace: "normal",
+                wordBreak: "break-word",
+                minWidth: 280,
+                lineHeight: 1.5,
+                display: "inline-block",
+              }}
+              onClick={() => {
+                if (record.url) {
+                  const fullUrl = record.url.startsWith('/') 
+                    ? `${BASE_URL}${record.url}` 
+                    : record.url;
+                  const separator = fullUrl.includes("?") ? "&" : "?";
+                  const version = record.updated ? encodeURIComponent(record.updated) : new Date().getTime().toString();
+                  const busterUrl = `${fullUrl}${separator}v=${version}`;
+                  setPreviewUrl(busterUrl);
+                  setDrawerTitle(record.title);
+                } else {
+                  navigate(`/rp_prototype/show/${record.id}`);
+                }
+              }}
+            >
+              {value || "未命名版本"}
+            </Typography.Link>
+          )}
+        />
         
         <Table.Column
           dataIndex="status"
           title="状态"
+          width={90}
+          align="center"
           render={(value) => {
             const statusMap: Record<string, { label: string; color: string }> = {
               draft: { label: "草稿", color: "default" },
@@ -115,56 +148,137 @@ export const PrototypeList = () => {
         <Table.Column
           dataIndex={["project"]}
           title="所属项目"
+          width={240}
           render={(value, record: any) => {
-            return record?.expand?.project?.name || projectMap[value] || value || "-";
+            const projectName = record?.expand?.project?.name || projectMap[value] || value || "-";
+            const projectId = record?.project || value;
+            if (projectId) {
+              return (
+                <Typography.Link
+                  style={{
+                    whiteSpace: "normal",
+                    wordBreak: "break-word",
+                    minWidth: 180,
+                    lineHeight: 1.4,
+                    display: "inline-block",
+                  }}
+                  onClick={() => navigate(`/rp_project/show/${projectId}`)}
+                >
+                  {projectName}
+                </Typography.Link>
+              );
+            }
+            return projectName;
           }}
         />
-        <Table.Column dataIndex="remark" title="备注" />
+        <Table.Column
+          dataIndex="remark"
+          title="备注"
+          render={(value) => (
+            <div style={{ whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.4, minWidth: 160 }}>
+              {value || "-"}
+            </div>
+          )}
+        />
         <Table.Column
           dataIndex="creator"
           title="创建人"
+          width={180}
           render={(value, record: any) => {
-            return record?.expand?.creator?.email || record?.expand?.creator?.name || value || "-";
+            const creatorName = record?.expand?.creator?.email || record?.expand?.creator?.name || value || "-";
+            return (
+              <div style={{ whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.4 }}>
+                {creatorName}
+              </div>
+            );
           }}
         />
         <Table.Column
           dataIndex="created"
           title="创建时间"
-          render={(value) => <DateField format="YYYY-MM-DD HH:mm:ss" value={value} />}
+          width={175}
+          sorter
+          render={(value) => (
+            <div style={{ whiteSpace: "nowrap", minWidth: 160 }}>
+              <DateField format="YYYY-MM-DD HH:mm:ss" value={value} />
+            </div>
+          )}
         />
         <Table.Column
           title="操作"
           dataIndex="actions"
+          width={200}
           render={(_, record: any) => {
             const isCreator = user?.id === record.creator;
+            const projectId = record?.project;
             return (
-              <Space>
-                {record.url && (
-                  <Tooltip title="预览原型">
-                    <Button
-                      size="small"
-                      icon={<GlobalOutlined />}
-                      onClick={() => {
-                        const fullUrl = record.url.startsWith('/') 
-                          ? `${BASE_URL}${record.url}` 
-                          : record.url;
-                        const separator = fullUrl.includes("?") ? "&" : "?";
-                        const version = record.updated ? encodeURIComponent(record.updated) : new Date().getTime().toString();
-                        const busterUrl = `${fullUrl}${separator}v=${version}`;
-                        setPreviewUrl(busterUrl);
-                        setDrawerTitle(record.title);
-                      }}
-                    />
-                  </Tooltip>
-                )}
-                <ShowButton hideText size="small" recordItemId={record.id} />
+              <Flex vertical gap={2} style={{ whiteSpace: "nowrap" }}>
+                {/* 第一行：查看与预览 */}
+                <Space split={<Divider type="vertical" />} size={0}>
+                  {record.url && (
+                    <Tooltip title="快速抽屉预览原型">
+                      <Button
+                        type="link"
+                        size="middle"
+                        icon={<GlobalOutlined />}
+                        style={{ padding: "0 6px" }}
+                        onClick={() => {
+                          const fullUrl = record.url.startsWith('/') 
+                            ? `${BASE_URL}${record.url}` 
+                            : record.url;
+                          const separator = fullUrl.includes("?") ? "&" : "?";
+                          const version = record.updated ? encodeURIComponent(record.updated) : new Date().getTime().toString();
+                          const busterUrl = `${fullUrl}${separator}v=${version}`;
+                          setPreviewUrl(busterUrl);
+                          setDrawerTitle(record.title);
+                        }}
+                      >
+                        预览
+                      </Button>
+                    </Tooltip>
+                  )}
+                  <Button
+                    type="link"
+                    size="middle"
+                    icon={<EyeOutlined />}
+                    style={{ padding: "0 6px" }}
+                    onClick={() => navigate(`/rp_prototype/show/${record.id}`)}
+                  >
+                    详情
+                  </Button>
+                  {projectId && (
+                    <Tooltip title="查看所属项目全量演进">
+                      <Button
+                        type="link"
+                        size="middle"
+                        icon={<ProjectOutlined />}
+                        style={{ padding: "0 6px" }}
+                        onClick={() => navigate(`/rp_project/show/${projectId}`)}
+                      >
+                        项目
+                      </Button>
+                    </Tooltip>
+                  )}
+                </Space>
+
+                {/* 第二行：管理与维护 */}
                 {isCreator && (
-                  <>
-                    <EditButton hideText size="small" recordItemId={record.id} />
-                    <DeleteButton hideText size="small" recordItemId={record.id} />
-                  </>
+                  <Space split={<Divider type="vertical" />} size={0}>
+                    <EditButton
+                      type="link"
+                      size="middle"
+                      recordItemId={record.id}
+                      style={{ padding: "0 6px" }}
+                    />
+                    <DeleteButton
+                      type="link"
+                      size="middle"
+                      recordItemId={record.id}
+                      style={{ padding: "0 6px" }}
+                    />
+                  </Space>
                 )}
-              </Space>
+              </Flex>
             );
           }}
         />
