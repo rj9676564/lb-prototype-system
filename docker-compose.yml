@@ -4,7 +4,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: backend/Dockerfile
+      dockerfile: Dockerfile
     image: docker.mrlb.top/ghcr.io/rj9676564/lb-prototype-system-backend:latest
     container_name: prototype-app
     restart: unless-stopped

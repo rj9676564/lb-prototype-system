@@ -1,8 +1,7 @@
-import { Refine, WelcomePage } from "@refinedev/core";
+import { Refine, WelcomePage, Authenticated, useGetIdentity } from "@refinedev/core";
 import { DevtoolsPanel, DevtoolsProvider } from "@refinedev/devtools";
 import { RefineKbar, RefineKbarProvider } from "@refinedev/kbar";
-import { ThemedLayout, AuthPage, ErrorComponent, ThemedTitle } from "@refinedev/antd";
-import { Authenticated } from "@refinedev/core";
+import { ThemedLayout, ThemedSider, AuthPage, ErrorComponent, ThemedTitle } from "@refinedev/antd";
 import { 
   ProjectList, ProjectCreate, ProjectEdit, ProjectShow 
 } from "./pages/rp_project";
@@ -109,6 +108,21 @@ const i18nProvider = {
   getLocale: () => "zh",
 };
 
+const CustomSider: React.FC<any> = (props) => {
+  const { data: user } = useGetIdentity<any>();
+  return (
+    <ThemedSider
+      {...props}
+      render={({ items, logout }) => (
+        <>
+          {items}
+          {user && logout}
+        </>
+      )}
+    />
+  );
+};
+
 function App() {
   return (
     <ConfigProvider locale={zhCN}>
@@ -169,6 +183,7 @@ function App() {
                       element={
                         <ThemedLayout
                           Header={Header}
+                          Sider={CustomSider}
                           Title={({ collapsed }) => (
                             <ThemedTitle
                               collapsed={collapsed}
