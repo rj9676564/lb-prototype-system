@@ -124,6 +124,16 @@ func main() {
 				fullPath := filepath.Join(sourceDir, filepath.FromSlash(relPath))
 				info, err := os.Stat(fullPath)
 				if err != nil {
+					// 智能容错：如果请求的具体 html（如 index.html）不存在，尝试查找该目录下的入口 html
+					dir := filepath.Dir(fullPath)
+					if dInfo, dErr := os.Stat(dir); dErr == nil && dInfo.IsDir() {
+						entryFile := resolvePrototypeEntryHTML(dir)
+						altPath := filepath.Join(dir, entryFile)
+						if altInfo, altErr := os.Stat(altPath); altErr == nil && !altInfo.IsDir() {
+							http.ServeFile(e.Response, e.Request, altPath)
+							return nil
+						}
+					}
 					return e.NotFoundError("文件不存在", err)
 				}
 				if info.IsDir() {
@@ -513,7 +523,13 @@ func tryGitCommitAndPush(sourceDir string, targetRelDir string, projectName stri
 		log.Printf("[Git] git commit 成功: %s", strings.TrimSpace(string(out)))
 	}
 
-	// 3. 获取当前分支并 git push
+	// 3. 测试阶段默认不推送到远程仓库（仅在显式配置 ENABLE_GIT_PUSH=true 时才推送）
+	if os.Getenv("ENABLE_GIT_PUSH") != "true" && os.Getenv("AUTO_GIT_PUSH") != "true" {
+		log.Printf("[Git] 当前处于测试阶段，已跳过远程 git push（本地修改与 Git Commit 已完成）")
+		return nil
+	}
+
+	// 获取当前分支并 git push
 	branchCmd := exec.CommandContext(ctx, "git", "-C", sourceDir, "rev-parse", "--abbrev-ref", "HEAD")
 	branchCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
 	branchOut, err := branchCmd.Output()

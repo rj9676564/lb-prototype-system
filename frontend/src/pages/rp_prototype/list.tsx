@@ -54,6 +54,16 @@ export const PrototypeList = () => {
     optionValue: "id",
   });
 
+  const projectMap = React.useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const opt of (projectSelectProps?.options as any[]) || []) {
+      if (opt?.value) {
+        map[opt.value] = opt.label;
+      }
+    }
+    return map;
+  }, [projectSelectProps?.options]);
+
   const projectFilter = filters?.find((f: any) => f.field === "project" && f.operator === "eq");
   // 优先从 URL 的 project 参数获取，其次从 filters，最后尝试解析 filters[0][value] 这种原始 URL 结构
   const filteredProjectId = searchParams.get("project") || 
@@ -106,7 +116,7 @@ export const PrototypeList = () => {
           dataIndex={["project"]}
           title="所属项目"
           render={(value, record: any) => {
-            return record?.expand?.project?.name ?? value ?? "-";
+            return record?.expand?.project?.name || projectMap[value] || value || "-";
           }}
         />
         <Table.Column dataIndex="remark" title="备注" />
