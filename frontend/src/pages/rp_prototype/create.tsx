@@ -1,12 +1,10 @@
 import React, { useState } from "react";
 import { Create, useForm, useSelect } from "@refinedev/antd";
 import { useInvalidate } from "@refinedev/core";
-import { Form, Input, Select, Upload, Button, Segmented, Space, Typography, Alert, message } from "antd";
-import { FolderOpenOutlined, FileZipOutlined, InboxOutlined } from "@ant-design/icons";
+import { Form, Input, Select, message } from "antd";
 import { useSearchParams, useNavigate } from "react-router";
 import JSZip from "jszip";
-
-const { Text } = Typography;
+import { PrototypeUploadZone, FileWithRelPath } from "../../components/PrototypeUploadZone";
 
 export const PrototypeCreate = () => {
   const [searchParams] = useSearchParams();
@@ -18,10 +16,20 @@ export const PrototypeCreate = () => {
   const { formProps, saveButtonProps, form } = useForm<any>({
     redirect: false,
   });
-  const [uploadMode, setUploadMode] = useState<"folder" | "zip">("folder");
-  const [folderFiles, setFolderFiles] = useState<any[]>([]);
-  const [zipFiles, setZipFiles] = useState<any[]>([]);
+
+  const [uploadData, setUploadData] = useState<{
+    mode: "folder" | "zip";
+    folderFiles: FileWithRelPath[];
+    zipFile: File | null;
+  }>({
+    mode: "folder",
+    folderFiles: [],
+    zipFile: null,
+  });
+
   const [packaging, setPackaging] = useState(false);
+  const [packingProgress, setPackingProgress] = useState<number | null>(null);
+  const [packingText, setPackingText] = useState<string>("");
 
   React.useEffect(() => {
     if (projectIdFromUrl) {
@@ -38,6 +46,21 @@ export const PrototypeCreate = () => {
 
   const handleOnFinish = async (values: any) => {
     try {
+      const { mode, folderFiles, zipFile } = uploadData;
+
+      if (mode === "folder") {
+        if (!folderFiles || folderFiles.length === 0) {
+          messageApi.error("请选择或拖入原型文件夹！");
+          return;
+        }
+      } else {
+        if (!zipFile) {
+          messageApi.error("请选择或拖入 ZIP 压缩包！");
+          return;
+        }
+      }
+
+      setPackaging(true);
       const formData = new FormData();
       Object.keys(values).forEach((key) => {
         if (key !== "file" && values[key] !== undefined && values[key] !== null) {
@@ -45,34 +68,35 @@ export const PrototypeCreate = () => {
         }
       });
 
-      if (uploadMode === "folder") {
-        if (folderFiles.length === 0) {
-          messageApi.error("请选择或拖入原型文件夹！");
-          return;
-        }
-
-        setPackaging(true);
-        messageApi.loading({ content: `正在快速打包 ${folderFiles.length} 个原型文件...`, key: "packing", duration: 0 });
+      if (mode === "folder") {
+        setPackingText(`正在打包 ${folderFiles.length} 个文件...`);
+        setPackingProgress(5);
 
         const zip = new JSZip();
         for (const item of folderFiles) {
-          const file = item.originFileObj as File;
-          if (!file) continue;
-          let relPath = file.webkitRelativePath || file.name;
-          const parts = relPath.split("/");
-          if (parts.length > 1) {
-            relPath = parts.slice(1).join("/");
-          }
-          zip.file(relPath, file);
+          zip.file(item.relativePath, item.file);
         }
 
-        const blob = await zip.generateAsync({ type: "blob" });
-        const zipFile = new File([blob], `${values.title || "prototype"}.zip`, { type: "application/zip" });
-        formData.append("file", zipFile);
-        messageApi.success({ content: "打包完成，正在上传并提交至 Git 仓库...", key: "packing", duration: 3 });
+        const blob = await zip.generateAsync(
+          {
+            type: "blob",
+            compression: "DEFLATE",
+            compressionOptions: { level: 6 },
+          },
+          (metadata) => {
+            setPackingProgress(Math.round(metadata.percent));
+            setPackingText(`正在打包文件 (${Math.round(metadata.percent)}%)...`);
+          },
+        );
+
+        setPackingText("正在上传并提交至 Git 仓库...");
+        const outputZipFile = new File([blob], `${values.title || "prototype"}.zip`, {
+          type: "application/zip",
+        });
+        formData.append("file", outputZipFile);
       } else {
-        if (zipFiles.length > 0 && zipFiles[0]?.originFileObj) {
-          formData.append("file", zipFiles[0].originFileObj);
+        if (zipFile) {
+          formData.append("file", zipFile);
         }
       }
 
@@ -92,6 +116,7 @@ export const PrototypeCreate = () => {
       messageApi.error("提交失败: " + (err?.message || "未知错误"));
     } finally {
       setPackaging(false);
+      setPackingProgress(null);
     }
   };
 
@@ -100,9 +125,6 @@ export const PrototypeCreate = () => {
     optionLabel: "name",
     optionValue: "id",
   });
-
-  const totalFolderSize = folderFiles.reduce((acc, f) => acc + (f.size || 0), 0);
-  const totalFolderSizeMB = (totalFolderSize / (1024 * 1024)).toFixed(2);
 
   return (
     <Create saveButtonProps={{ ...saveButtonProps, loading: packaging || saveButtonProps?.loading }}>
@@ -130,66 +152,11 @@ export const PrototypeCreate = () => {
         </Form.Item>
 
         <Form.Item label="原型文件上传" required>
-          <Space direction="vertical" style={{ width: "100%" }} size="middle">
-            <Segmented
-              value={uploadMode}
-              onChange={(val) => setUploadMode(val as "folder" | "zip")}
-              options={[
-                { label: "选择整个文件夹 (推荐)", value: "folder", icon: <FolderOpenOutlined /> },
-                { label: "上传 ZIP 压缩包", value: "zip", icon: <FileZipOutlined /> },
-              ]}
-            />
-
-            {uploadMode === "folder" ? (
-              <Upload.Dragger
-                directory
-                multiple
-                beforeUpload={() => false}
-                fileList={folderFiles}
-                onChange={({ fileList }) => setFolderFiles(fileList)}
-                showUploadList={{ showRemoveIcon: true }}
-                maxCount={2000}
-              >
-                <p className="ant-upload-drag-icon">
-                  <InboxOutlined />
-                </p>
-                <p className="ant-upload-text">点击选择或将整个 Axure 导出的原型文件夹拖拽至此处</p>
-                <p className="ant-upload-hint">
-                  系统会自动保留目录结构并在本地快速打包上传
-                </p>
-                {folderFiles.length > 0 && (
-                  <div style={{ marginTop: 12 }}>
-                    <Text type="success">
-                      已选文件夹包含 {folderFiles.length} 个文件（共约 {totalFolderSizeMB} MB）
-                    </Text>
-                  </div>
-                )}
-              </Upload.Dragger>
-            ) : (
-              <Upload.Dragger
-                beforeUpload={() => false}
-                maxCount={1}
-                accept=".zip,application/zip,application/x-zip-compressed"
-                fileList={zipFiles}
-                onChange={({ fileList }) => setZipFiles(fileList)}
-              >
-                <p className="ant-upload-drag-icon">
-                  <InboxOutlined />
-                </p>
-                <p className="ant-upload-text">点击或将 ZIP 压缩包拖拽至此处</p>
-                <p className="ant-upload-hint">
-                  支持 Axure 打包生成的 .zip 压缩包
-                </p>
-              </Upload.Dragger>
-            )}
-
-            <Alert
-              type="info"
-              showIcon
-              message="自动归档与 Git 提交"
-              description="上传成功后，系统将自动按「当前年月 / 项目名 / 版本标题」归档写入 Git 仓库，并自动执行 Git Commit & Push。"
-            />
-          </Space>
+          <PrototypeUploadZone
+            onFilesChange={setUploadData}
+            packagingProgress={packingProgress}
+            packagingText={packingText}
+          />
         </Form.Item>
 
         <Form.Item

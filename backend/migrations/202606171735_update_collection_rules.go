@@ -93,6 +93,7 @@ func upgradePrototypeCollection(app core.App) error {
 	addFieldIfMissing(collection, &core.FileField{
 		Name:      "file",
 		MaxSelect: 1,
+		MaxSize:   524288000,
 		MimeTypes: []string{"application/zip", "application/x-zip-compressed", "application/octet-stream"},
 	})
 	addFieldIfMissing(collection, &core.JSONField{

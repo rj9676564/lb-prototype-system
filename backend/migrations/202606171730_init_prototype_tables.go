@@ -185,6 +185,7 @@ func ensurePrototypeCollection(app core.App) error {
 		&core.FileField{
 			Name:      "file",
 			MaxSelect: 1,
+			MaxSize:   524288000,
 			MimeTypes: []string{"application/zip", "application/x-zip-compressed", "application/octet-stream"},
 		},
 		&core.TextField{
