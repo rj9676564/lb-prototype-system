@@ -16,4 +16,4 @@ services:
       PROTOTYPE_SOURCE_DIR: /app/source-prototypes
     volumes:
       - ${PB_DATA_DIR:-./pb_data}:/app/pb_data # PocketBase 数据持久化目录
-      - ${HOST_PROTOTYPE_SOURCE_DIR:-/Users/laibin/Documents/shopkeeper}:/app/source-prototypes:ro
+      - ${HOST_PROTOTYPE_SOURCE_DIR:-/Users/laibin/Documents/jh_demand/shopkeeper}:/app/source-prototypes

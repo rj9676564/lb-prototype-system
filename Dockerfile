@@ -46,7 +46,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ==========================================
 FROM alpine:latest
 
-RUN apk add --no-cache ca-certificates tzdata bash
+RUN apk add --no-cache ca-certificates tzdata bash git openssh-client
 
 WORKDIR /app
 

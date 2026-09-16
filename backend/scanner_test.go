@@ -73,3 +73,4 @@ func TestDiscoverPrototypePaths(t *testing.T) {
 		t.Errorf("expected main.html for projC, got %s", entry)
 	}
 }
+

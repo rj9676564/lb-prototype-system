@@ -120,10 +120,12 @@ export const ProjectList = () => {
 
       const scannedCount = result.scanned_projects ?? 0;
       const syncedCount = result.synced_projects ?? 0;
+      const deletedCount = result.deleted_projects ?? 0;
+      const deletedMsg = deletedCount > 0 ? `，移除下架 ${deletedCount} 个` : "";
       const unsyncedCount = Math.max(scannedCount - syncedCount, skippedCount);
 
       await messageApi.success(
-        `扫描完成：发现 ${scannedCount} 个候选项目，成功同步 ${syncedCount} 个（新增 ${result.created_projects ?? 0}，更新 ${result.updated_projects ?? 0}），未同步 ${unsyncedCount} 个。`,
+        `扫描完成：发现 ${scannedCount} 个候选项目，成功同步 ${syncedCount} 个（新增 ${result.created_projects ?? 0}，更新 ${result.updated_projects ?? 0}${deletedMsg}），未同步 ${unsyncedCount} 个。`,
       );
 
       if (skippedCount > 0) {
@@ -195,17 +197,6 @@ export const ProjectList = () => {
           title="创建人"
           render={(value, record: any) => {
             return record?.expand?.creator?.email || record?.expand?.creator?.name || value || "-";
-          }}
-        />
-        <Table.Column
-          dataIndex="folder_time"
-          title="文件夹时间"
-          defaultSortOrder="descend"
-          sortDirections={["descend", "ascend", "descend"]}
-          sorter
-          render={(value, record: any) => {
-            const timeVal = value || record.created;
-            return <DateField format="YYYY-MM-DD HH:mm:ss" value={timeVal} />;
           }}
         />
         <Table.Column
