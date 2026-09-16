@@ -432,7 +432,7 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 			log.Printf("[Scanner] 项目记录更新成功 [%s] (ID: %s)", relPath, projectRecord.Id)
 		}
 
-		_, createdVersion, err := ensurePrototypeRecord(app, prototypeCollection, mapping, relPath, projectRecord, creatorID)
+		_, createdVersion, err := ensurePrototypeRecord(app, prototypeCollection, mapping, absSourceDir, relPath, projectRecord, creatorID)
 		if err != nil {
 			log.Printf("[Scanner] 同步版本记录失败 [%s]: %v", relPath, err)
 			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": [Version] "+err.Error())
@@ -462,70 +462,12 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 }
 
 func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
-	log.Printf("[Scanner] 开始扫描源目录: %s", sourceDir)
-	entries, err := os.ReadDir(sourceDir)
-	if err != nil {
-		log.Printf("[Scanner] 读取目录失败: %v", err)
-		return nil, nil, err
-	}
+	log.Printf("[Scanner] 开始多层级深度扫描源目录: %s", sourceDir)
 
 	var paths []string
 	var skipped []string
 
-	for _, entry := range entries {
-		// 判断是否是文件夹（支持软链接）
-		isDir := isEntryDir(sourceDir, entry)
-		log.Printf("[Scanner] [一级条目] Name: %s, IsDir: %v, Type: %s", entry.Name(), isDir, entry.Type())
-
-		if !isDir || isHiddenName(entry.Name()) {
-			continue
-		}
-
-		topLevelPath := entry.Name()
-		topLevelAbs := filepath.Join(sourceDir, topLevelPath)
-		hasIndex, err := containsIndexHTML(topLevelAbs)
-		if err != nil {
-			log.Printf("[Scanner] [一级条目检查] 检查含有 index.html 失败 [%s]: %v", topLevelPath, err)
-			skipped = append(skipped, topLevelPath+": "+err.Error())
-			continue
-		}
-		if hasIndex {
-			log.Printf("[Scanner] [一级条目匹配] 发现含有 index.html, 作为项目路径: %s", topLevelPath)
-			paths = append(paths, topLevelPath)
-			continue
-		}
-
-		// 如果一级目录没有 index.html，扫描二级子目录
-		log.Printf("[Scanner] [一级条目未匹配] 正在深入扫描二级子目录: %s", topLevelPath)
-		childEntries, err := os.ReadDir(topLevelAbs)
-		if err != nil {
-			log.Printf("[Scanner] [二级条目读取] 读取子目录失败 [%s]: %v", topLevelPath, err)
-			skipped = append(skipped, topLevelPath+": "+err.Error())
-			continue
-		}
-
-		for _, child := range childEntries {
-			isChildDir := isEntryDir(topLevelAbs, child)
-			log.Printf("[Scanner]   [二级子条目] Name: %s/%s, IsDir: %v, Type: %s", topLevelPath, child.Name(), isChildDir, child.Type())
-
-			if !isChildDir || isHiddenName(child.Name()) {
-				continue
-			}
-
-			childPath := filepath.Join(topLevelPath, child.Name())
-			childAbs := filepath.Join(sourceDir, childPath)
-			hasIndex, err := containsIndexHTML(childAbs)
-			if err != nil {
-				log.Printf("[Scanner]   [二级条目检查] 检查含有 index.html 失败 [%s]: %v", childPath, err)
-				skipped = append(skipped, childPath+": "+err.Error())
-				continue
-			}
-			if hasIndex {
-				log.Printf("[Scanner]   [二级条目匹配] 发现含有 index.html, 作为项目路径: %s", childPath)
-				paths = append(paths, filepath.ToSlash(childPath))
-			}
-		}
-	}
+	scanDirRecursive(sourceDir, "", 0, 8, &paths, &skipped)
 
 	sort.Slice(paths, func(i, j int) bool {
 		timeI := resolveFolderTime(sourceDir, paths[i])
@@ -535,7 +477,143 @@ func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
 		}
 		return timeI.After(timeJ)
 	})
+
+	log.Printf("[Scanner] 深度扫描完成。共发现有效项目路径: %d 个, 忽略/错误路径: %d 个", len(paths), len(skipped))
 	return paths, skipped, nil
+}
+
+func scanDirRecursive(sourceDir string, currentRelPath string, depth int, maxDepth int, paths *[]string, skipped *[]string) {
+	if depth > maxDepth {
+		return
+	}
+
+	currentAbs := filepath.Join(sourceDir, currentRelPath)
+
+	if currentRelPath != "" {
+		baseName := filepath.Base(currentRelPath)
+		if isHiddenName(baseName) || isAxureResourceDir(baseName) {
+			return
+		}
+
+		isProto, err := isPrototypeDir(currentAbs)
+		if err != nil {
+			log.Printf("[Scanner] 检查目录失败 [%s]: %v", currentRelPath, err)
+			*skipped = append(*skipped, currentRelPath+": "+err.Error())
+			return
+		}
+
+		if isProto {
+			log.Printf("[Scanner] [命中原型项目] 深度 %d: %s", depth, currentRelPath)
+			*paths = append(*paths, filepath.ToSlash(currentRelPath))
+			// 命中原型根目录后，不再向其内部子目录递归
+			return
+		}
+	}
+
+	entries, err := os.ReadDir(currentAbs)
+	if err != nil {
+		log.Printf("[Scanner] 读取目录失败 [%s]: %v", currentRelPath, err)
+		if depth > 0 {
+			*skipped = append(*skipped, currentRelPath+": "+err.Error())
+		}
+		return
+	}
+
+	for _, entry := range entries {
+		if !isEntryDir(currentAbs, entry) || isHiddenName(entry.Name()) || isAxureResourceDir(entry.Name()) {
+			continue
+		}
+
+		childRelPath := entry.Name()
+		if currentRelPath != "" {
+			childRelPath = filepath.Join(currentRelPath, entry.Name())
+		}
+
+		scanDirRecursive(sourceDir, childRelPath, depth+1, maxDepth, paths, skipped)
+	}
+}
+
+func isAxureResourceDir(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "data" || lower == "files" || lower == "images" || lower == "plugins" || lower == "resources" || lower == "__macosx"
+}
+
+func isPrototypeDir(dir string) (bool, error) {
+	// 1. 标准入口 HTML
+	standardFiles := []string{"index.html", "index.htm", "start.html", "app.html", "default.html"}
+	for _, name := range standardFiles {
+		if fileExists(filepath.Join(dir, name)) {
+			return true, nil
+		}
+	}
+
+	// 2. Axure 标志性文件/目录结构
+	if fileExists(filepath.Join(dir, "data", "document.js")) ||
+		fileExists(filepath.Join(dir, "data", "styles.css")) ||
+		dirExists(filepath.Join(dir, "resources", "scripts", "axure")) ||
+		dirExists(filepath.Join(dir, "resources", "scripts")) {
+		return true, nil
+	}
+
+	// 3. 含有任意 .html 且包含 Axure 相关资源目录
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+
+	hasHTML := false
+	hasAxureAssetDir := false
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".html") && !isHiddenName(entry.Name()) {
+			hasHTML = true
+		}
+		if isEntryDir(dir, entry) && isAxureResourceDir(entry.Name()) {
+			hasAxureAssetDir = true
+		}
+	}
+
+	return hasHTML && hasAxureAssetDir, nil
+}
+
+func resolvePrototypeEntryHTML(dir string) string {
+	standardFiles := []string{"index.html", "start.html", "app.html", "index.htm", "default.html"}
+	for _, name := range standardFiles {
+		if fileExists(filepath.Join(dir, name)) {
+			return name
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		var htmlFiles []string
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".html") && !isHiddenName(entry.Name()) {
+				htmlFiles = append(htmlFiles, entry.Name())
+			}
+		}
+		if len(htmlFiles) > 0 {
+			sort.Strings(htmlFiles)
+			return htmlFiles[0]
+		}
+	}
+
+	return "index.html"
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err == nil {
+		return !info.IsDir()
+	}
+	return false
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if err == nil {
+		return info.IsDir()
+	}
+	return false
 }
 
 var (
@@ -693,17 +771,17 @@ func ensureProjectRecord(app core.App, collection *core.Collection, mapping *sca
 	return record, true, nil
 }
 
-func ensurePrototypeRecord(app core.App, collection *core.Collection, mapping *scanMapping, relPath string, projectRecord *core.Record, creatorID string) (*core.Record, bool, error) {
+func ensurePrototypeRecord(app core.App, collection *core.Collection, mapping *scanMapping, sourceDir string, relPath string, projectRecord *core.Record, creatorID string) (*core.Record, bool, error) {
 	if id := mapping.Versions[relPath]; id != "" {
 		record, err := app.FindFirstRecordByFilter(collection, "id = {:id}", map[string]any{"id": id})
 		if err == nil {
-			applyPrototypeFields(record, relPath, projectRecord.Id, creatorID)
+			applyPrototypeFields(record, sourceDir, relPath, projectRecord.Id, creatorID)
 			return record, false, app.Save(record)
 		}
 	}
 
 	record := core.NewRecord(collection)
-	applyPrototypeFields(record, relPath, projectRecord.Id, creatorID)
+	applyPrototypeFields(record, sourceDir, relPath, projectRecord.Id, creatorID)
 	if err := app.Save(record); err != nil {
 		return nil, false, err
 	}
@@ -732,12 +810,14 @@ func applyProjectFields(record *core.Record, sourceDir string, relPath string, d
 	}
 }
 
-func applyPrototypeFields(record *core.Record, relPath string, projectID string, creatorID string) {
+func applyPrototypeFields(record *core.Record, sourceDir string, relPath string, projectID string, creatorID string) {
 	setFieldIfExists(record, "project", projectID)
 	setFieldIfExists(record, "title", autoVersionTitle)
 	setFieldIfExists(record, "remark", autoDescription(relPath))
 	setFieldIfExists(record, "status", "approved")
-	setFieldIfExists(record, "url", "/linked-projects/"+filepath.ToSlash(relPath)+"/index.html")
+
+	entryFile := resolvePrototypeEntryHTML(filepath.Join(sourceDir, filepath.FromSlash(relPath)))
+	setFieldIfExists(record, "url", "/linked-projects/"+filepath.ToSlash(relPath)+"/"+entryFile)
 	setFieldIfExists(record, "creator", creatorID)
 	setFieldIfExists(record, "skip_diff_hook", true)
 }
@@ -857,17 +937,6 @@ func isRasterImage(ext string) bool {
 
 func isSupportedProjectImage(name string) bool {
 	return isRasterImage(filepath.Ext(name))
-}
-
-func containsIndexHTML(dir string) (bool, error) {
-	info, err := os.Stat(filepath.Join(dir, "index.html"))
-	if err == nil {
-		return !info.IsDir(), nil
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	return false, err
 }
 
 func isHiddenName(name string) bool {
