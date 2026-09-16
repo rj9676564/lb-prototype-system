@@ -231,10 +231,15 @@ func main() {
 			tryGitPull(sourceDir)
 
 			projectName := "默认项目"
+			var projectRelBase string
 			if projectId := e.Record.GetString("project"); projectId != "" {
 				if projRecord, err := e.App.FindRecordById("rp_project", projectId); err == nil {
 					if name := strings.TrimSpace(projRecord.GetString("name")); name != "" {
 						projectName = name
+					}
+					desc := projRecord.GetString("description")
+					if strings.HasPrefix(desc, autoSourcePrefix+" ") {
+						projectRelBase = strings.TrimSpace(strings.TrimPrefix(desc, autoSourcePrefix+" "))
 					}
 				}
 			}
@@ -243,13 +248,19 @@ func main() {
 			if versionTitle == "" {
 				versionTitle = "未命名版本"
 			}
-
-			now := time.Now()
-			yearMonth := fmt.Sprintf("%d年%d月", now.Year(), int(now.Month()))
-			cleanProject := sanitizePathComponent(projectName)
 			cleanVersion := sanitizePathComponent(versionTitle)
 
-			targetRelDir := filepath.Join(yearMonth, cleanProject, cleanVersion)
+			var targetRelDir string
+			if projectRelBase != "" {
+				// 若所选项目已有归档目录（例如 2026年11月/存量设备升级-美团单链需求），直接归入该项目名下！
+				targetRelDir = filepath.Join(projectRelBase, cleanVersion)
+			} else {
+				now := time.Now()
+				yearMonth := fmt.Sprintf("%d年%d月", now.Year(), int(now.Month()))
+				cleanProject := sanitizePathComponent(projectName)
+				targetRelDir = filepath.Join(yearMonth, cleanProject, cleanVersion)
+			}
+
 			targetDir := filepath.Join(sourceDir, filepath.FromSlash(targetRelDir))
 
 			os.RemoveAll(targetDir)
@@ -1056,7 +1067,8 @@ func extractTimeFromPath(relPath string, fallback time.Time) time.Time {
 	}
 
 	var hour, min, sec, nsec int
-	if !fallback.IsZero() && fallback.Year() == year && int(fallback.Month()) == month {
+	if !fallback.IsZero() {
+		// 无论 fallback 处于哪个月，均保留时分秒与纳秒，确保同月份下的项目能依据最新修改时间精准排序
 		hour, min, sec = fallback.Hour(), fallback.Minute(), fallback.Second()
 		nsec = fallback.Nanosecond()
 	}
