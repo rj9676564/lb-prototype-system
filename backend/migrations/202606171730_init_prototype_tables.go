@@ -55,8 +55,8 @@ func ensureUsersCollection(app core.App) error {
 	users := core.NewAuthCollection("users", "_pb_users_auth_")
 
 	ownerRule := "id = @request.auth.id"
-	users.ListRule = stringPtr(ownerRule)
-	users.ViewRule = stringPtr(ownerRule)
+	users.ListRule = stringPtr("")
+	users.ViewRule = stringPtr("")
 	users.CreateRule = stringPtr("")
 	users.UpdateRule = stringPtr(ownerRule)
 	users.DeleteRule = stringPtr(ownerRule)
@@ -99,8 +99,8 @@ func ensureProjectCollection(app core.App) error {
 	}
 
 	collection := core.NewBaseCollection("rp_project")
-	collection.ListRule = stringPtr(anyAuthRule)
-	collection.ViewRule = stringPtr(anyAuthRule)
+	collection.ListRule = stringPtr("")
+	collection.ViewRule = stringPtr("")
 	collection.CreateRule = stringPtr(anyAuthRule)
 	collection.UpdateRule = stringPtr(ownerOnlyRule)
 	collection.DeleteRule = stringPtr(ownerOnlyRule)
@@ -160,8 +160,8 @@ func ensurePrototypeCollection(app core.App) error {
 	}
 
 	collection := core.NewBaseCollection("rp_prototype")
-	collection.ListRule = stringPtr(prototypeVisibleRule)
-	collection.ViewRule = stringPtr(prototypeVisibleRule)
+	collection.ListRule = stringPtr("")
+	collection.ViewRule = stringPtr("")
 	collection.CreateRule = stringPtr(anyAuthRule)
 	collection.UpdateRule = stringPtr(ownerOnlyRule)
 	collection.DeleteRule = stringPtr(ownerOnlyRule)

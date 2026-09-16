@@ -157,7 +157,7 @@ export const ProjectList = () => {
   };
 
   return (
-    <List>
+    <List headerButtons={user ? undefined : false}>
       {contextHolder}
       <Form {...searchFormProps} layout="inline" style={{ marginBottom: "1rem" }}>
         <Form.Item name="keyword">
@@ -167,9 +167,11 @@ export const ProjectList = () => {
           <Button type="primary" htmlType="submit">
             搜索
           </Button>
-          <Button icon={<SyncOutlined />} loading={syncing} onClick={handleScanImport}>
-            扫描导入
-          </Button>
+          {user && (
+            <Button icon={<SyncOutlined />} loading={syncing} onClick={handleScanImport}>
+              扫描导入
+            </Button>
+          )}
         </Flex>
       </Form>
       <Table {...tableProps} rowKey="id">
