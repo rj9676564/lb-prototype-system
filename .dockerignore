@@ -1,0 +1,6 @@
+**/.git
+**/node_modules
+**/dist
+backend/pb_data
+backend/my-pb
+.DS_Store

@@ -1,14 +1,14 @@
-import { Refine, WelcomePage } from "@refinedev/core";
+import { Refine, WelcomePage, Authenticated, useGetIdentity } from "@refinedev/core";
 import { DevtoolsPanel, DevtoolsProvider } from "@refinedev/devtools";
 import { RefineKbar, RefineKbarProvider } from "@refinedev/kbar";
-import { ThemedLayout, AuthPage, ErrorComponent, ThemedTitle } from "@refinedev/antd";
-import { Authenticated } from "@refinedev/core";
+import { ThemedLayout, ThemedSider, AuthPage, ErrorComponent, ThemedTitle } from "@refinedev/antd";
 import { 
   ProjectList, ProjectCreate, ProjectEdit, ProjectShow 
 } from "./pages/rp_project";
 import { 
   PrototypeList, PrototypeCreate, PrototypeEdit, PrototypeShow 
 } from "./pages/rp_prototype";
+import { Header } from "./components/header";
 
 import { useNotificationProvider } from "@refinedev/antd";
 import "@refinedev/antd/dist/reset.css";
@@ -108,6 +108,21 @@ const i18nProvider = {
   getLocale: () => "zh",
 };
 
+const CustomSider: React.FC<any> = (props) => {
+  const { data: user } = useGetIdentity<any>();
+  return (
+    <ThemedSider
+      {...props}
+      render={({ items, logout }) => (
+        <>
+          {items}
+          {user && logout}
+        </>
+      )}
+    />
+  );
+};
+
 function App() {
   return (
     <ConfigProvider locale={zhCN}>
@@ -166,31 +181,59 @@ function App() {
                   <Routes>
                     <Route
                       element={
-                        <Authenticated key="authenticated-routes" fallback={<CatchAllNavigate to="/login" />}>
-                          <ThemedLayout
-                            Title={({ collapsed }) => (
-                              <ThemedTitle
-                                collapsed={collapsed}
-                                text="原型管理"
-                              />
-                            )}
-                          >
-                            <Outlet />
-                          </ThemedLayout>
-                        </Authenticated>
+                        <ThemedLayout
+                          Header={Header}
+                          Sider={CustomSider}
+                          Title={({ collapsed }) => (
+                            <ThemedTitle
+                              collapsed={collapsed}
+                              text="原型管理"
+                            />
+                          )}
+                        >
+                          <Outlet />
+                        </ThemedLayout>
                       }
                     >
                       <Route index element={<Navigate to="/rp_project" />} />
                       <Route path="/rp_project">
                         <Route index element={<ProjectList />} />
-                        <Route path="create" element={<ProjectCreate />} />
-                        <Route path="edit/:id" element={<ProjectEdit />} />
+                        <Route
+                          path="create"
+                          element={
+                            <Authenticated key="rp_project-create" fallback={<CatchAllNavigate to="/login" />}>
+                              <ProjectCreate />
+                            </Authenticated>
+                          }
+                        />
+                        <Route
+                          path="edit/:id"
+                          element={
+                            <Authenticated key="rp_project-edit" fallback={<CatchAllNavigate to="/login" />}>
+                              <ProjectEdit />
+                            </Authenticated>
+                          }
+                        />
                         <Route path="show/:id" element={<ProjectShow />} />
                       </Route>
                       <Route path="/rp_prototype">
                         <Route index element={<PrototypeList />} />
-                        <Route path="create" element={<PrototypeCreate />} />
-                        <Route path="edit/:id" element={<PrototypeEdit />} />
+                        <Route
+                          path="create"
+                          element={
+                            <Authenticated key="rp_prototype-create" fallback={<CatchAllNavigate to="/login" />}>
+                              <PrototypeCreate />
+                            </Authenticated>
+                          }
+                        />
+                        <Route
+                          path="edit/:id"
+                          element={
+                            <Authenticated key="rp_prototype-edit" fallback={<CatchAllNavigate to="/login" />}>
+                              <PrototypeEdit />
+                            </Authenticated>
+                          }
+                        />
                         <Route path="show/:id" element={<PrototypeShow />} />
                       </Route>
                       <Route path="*" element={<ErrorComponent />} />

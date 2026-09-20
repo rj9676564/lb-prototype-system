@@ -76,4 +76,24 @@ func TestExtractTimeFromPath(t *testing.T) {
 	if !tJun10.After(tApr) {
 		t.Errorf("Expected June 10 (%v) to be after April (%v)", tJun10, tApr)
 	}
+
+	// Test non-dated paths with fallback
+	tMES := extractTimeFromPath("MES系统", time.Date(2023, 11, 20, 8, 0, 0, 0, time.UTC))
+	if tMES.Year() != 2023 || tMES.Month() != 11 || tMES.Day() != 20 {
+		t.Errorf("expected 2023-11-20 for MES系统, got %v", tMES)
+	}
+
+	tOld := extractTimeFromPath("2024年5月/旧项目", time.Date(2026, 9, 16, 12, 0, 0, 0, time.UTC))
+	if tOld.Year() != 2024 || tOld.Month() != 5 || tOld.Day() != 1 {
+		t.Errorf("expected 2024-05-01 for 2024年5月, got %v", tOld)
+	}
+
+	// Test 2025年前 vs 2026年10月
+	t2025Before := extractTimeFromPath("2025年前历史产品文档/扫码点餐二期", time.Date(2026, 9, 16, 18, 7, 58, 0, time.UTC))
+	t2026Oct := extractTimeFromPath("2026年10月/扫码点餐v1.03需求", time.Date(2026, 9, 16, 10, 25, 50, 0, time.UTC))
+
+	if !t2026Oct.After(t2025Before) {
+		t.Errorf("Expected 2026年10月 (%v) to be after 2025年前 (%v)", t2026Oct, t2025Before)
+	}
 }
+

@@ -28,13 +28,13 @@ export const authProvider: AuthProvider = {
   },
   logout: async () => {
     pb.authStore.clear();
-    return { success: true, redirectTo: "/login" };
+    return { success: true, redirectTo: "/rp_project" };
   },
   check: async () => {
     if (pb.authStore.isValid) {
       return { authenticated: true };
     }
-    return { authenticated: false, redirectTo: "/login" };
+    return { authenticated: false };
   },
   getPermissions: async () => null,
   getIdentity: async () => {
@@ -42,8 +42,8 @@ export const authProvider: AuthProvider = {
       const user = pb.authStore.model;
       return {
         ...user,
-        name: user.username || user.email,
-        avatar: user.avatar?.url || undefined,
+        name: user.username || user.name || user.email,
+        avatar: user.avatar ? pb.files.getUrl(user, user.avatar) : undefined,
       };
     }
     return null;

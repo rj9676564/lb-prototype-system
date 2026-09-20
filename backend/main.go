@@ -2,13 +2,16 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -44,6 +47,7 @@ type syncSummary struct {
 	SyncedProjects  int      `json:"synced_projects"`
 	CreatedProjects int      `json:"created_projects"`
 	UpdatedProjects int      `json:"updated_projects"`
+	DeletedProjects int      `json:"deleted_projects"`
 	CreatedVersions int      `json:"created_versions"`
 	UpdatedVersions int      `json:"updated_versions"`
 	SkippedPaths    []string `json:"skipped_paths"`
@@ -51,17 +55,32 @@ type syncSummary struct {
 
 var errSourceDirNotConfigured = errors.New("未配置 PROTOTYPE_SOURCE_DIR，无法扫描原型目录")
 
+func getEffectiveSourceDir() string {
+	if s := strings.TrimSpace(os.Getenv("PROTOTYPE_SOURCE_DIR")); s != "" {
+		return s
+	}
+	if info, err := os.Stat("/app/source-prototypes"); err == nil && info.IsDir() {
+		return "/app/source-prototypes"
+	}
+	if info, err := os.Stat("/Users/laibin/Documents/jh_demand/shopkeeper"); err == nil && info.IsDir() {
+		return "/Users/laibin/Documents/jh_demand/shopkeeper"
+	}
+	if info, err := os.Stat("/Users/laibin/Documents/shopkeeper"); err == nil && info.IsDir() {
+		return "/Users/laibin/Documents/shopkeeper"
+	}
+	return ""
+}
+
 func main() {
 	app := pocketbase.New()
 
 	migratecmd.MustRegister(app, app.RootCmd, migratecmd.Config{
 		Automigrate: true,
-		Dir:         "migrations",
 	})
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		staticHandler := apis.Static(os.DirFS("./pb_public"), false)
-		sourceDir := strings.TrimSpace(os.Getenv("PROTOTYPE_SOURCE_DIR"))
+		sourceDir := getEffectiveSourceDir()
 
 		// 对响应体启用 gzip：原型目录里大量的 HTML/JS/CSS 通常能压掉 70% 以上。
 		// 小于 1KB 的响应压缩后反而可能变大，直接跳过。
@@ -85,14 +104,15 @@ func main() {
 
 		if sourceDir != "" {
 			se.Router.GET("/linked-projects/{path...}", func(e *core.RequestEvent) error {
-				if err := ensureSafeLinkedProjectPath(e.Request.PathValue(apis.StaticWildcardParam)); err != nil {
+				relPath := e.Request.PathValue(apis.StaticWildcardParam)
+				if err := ensureSafeLinkedProjectPath(relPath); err != nil {
 					return e.BadRequestError("非法的预览路径", err)
 				}
 
 				e.Response.Header().Del("X-Frame-Options")
 				e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
 
-				ext := strings.ToLower(filepath.Ext(e.Request.URL.Path))
+				ext := strings.ToLower(filepath.Ext(relPath))
 				if isRasterImage(ext) {
 					// 原型内的图片资源启用前端强缓存
 					e.Response.Header().Set("Cache-Control", "public, max-age=604800")
@@ -101,7 +121,28 @@ func main() {
 					e.Response.Header().Set("Cache-Control", "no-cache, must-revalidate")
 				}
 
-				return apis.Static(os.DirFS(sourceDir), false)(e)
+				fullPath := filepath.Join(sourceDir, filepath.FromSlash(relPath))
+				info, err := os.Stat(fullPath)
+				if err != nil {
+					// 智能容错：如果请求的具体 html（如 index.html）不存在，尝试查找该目录下的入口 html
+					dir := filepath.Dir(fullPath)
+					if dInfo, dErr := os.Stat(dir); dErr == nil && dInfo.IsDir() {
+						entryFile := resolvePrototypeEntryHTML(dir)
+						altPath := filepath.Join(dir, entryFile)
+						if altInfo, altErr := os.Stat(altPath); altErr == nil && !altInfo.IsDir() {
+							http.ServeFile(e.Response, e.Request, altPath)
+							return nil
+						}
+					}
+					return e.NotFoundError("文件不存在", err)
+				}
+				if info.IsDir() {
+					entryFile := resolvePrototypeEntryHTML(fullPath)
+					fullPath = filepath.Join(fullPath, entryFile)
+				}
+
+				http.ServeFile(e.Response, e.Request, fullPath)
+				return nil
 			})
 		}
 
@@ -195,40 +236,94 @@ func main() {
 			return nil
 		}
 
-		destDir := filepath.Join("pb_public", "projects", recordId)
+		sourceDir := getEffectiveSourceDir()
+		if sourceDir != "" {
+			tryGitPull(sourceDir)
 
-		os.RemoveAll(destDir)
-		os.MkdirAll(destDir, os.ModePerm)
-		log.Println("准备解压到文件夹:", destDir)
+			projectName := "默认项目"
+			var projectRelBase string
+			if projectId := e.Record.GetString("project"); projectId != "" {
+				if projRecord, err := e.App.FindRecordById("rp_project", projectId); err == nil {
+					if name := strings.TrimSpace(projRecord.GetString("name")); name != "" {
+						projectName = name
+					}
+					desc := projRecord.GetString("description")
+					if strings.HasPrefix(desc, autoSourcePrefix+" ") {
+						projectRelBase = strings.TrimSpace(strings.TrimPrefix(desc, autoSourcePrefix+" "))
+					}
+				}
+			}
 
-		if err := unzip(zipPath, destDir); err != nil {
-			log.Println("解压失败:", err)
-			return nil
-		}
-		log.Println("解压成功！")
+			versionTitle := strings.TrimSpace(e.Record.GetString("title"))
+			if versionTitle == "" {
+				versionTitle = "未命名版本"
+			}
+			cleanVersion := sanitizePathComponent(versionTitle)
 
-		// 5. 动态寻找 index.html
-		foundIndexPath := ""
-		filepath.Walk(destDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || strings.ToLower(info.Name()) != "index.html" {
+			var targetRelDir string
+			if projectRelBase != "" {
+				// 若所选项目已有归档目录（例如 2026年11月/存量设备升级-美团单链需求），直接归入该项目名下！
+				targetRelDir = filepath.Join(projectRelBase, cleanVersion)
+			} else {
+				now := time.Now()
+				yearMonth := fmt.Sprintf("%d年%d月", now.Year(), int(now.Month()))
+				cleanProject := sanitizePathComponent(projectName)
+				targetRelDir = filepath.Join(yearMonth, cleanProject, cleanVersion)
+			}
+
+			targetDir := filepath.Join(sourceDir, filepath.FromSlash(targetRelDir))
+
+			os.RemoveAll(targetDir)
+			if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
+				log.Printf("创建目标目录失败 [%s]: %v", targetDir, err)
+			} else if err := unzip(zipPath, targetDir); err != nil {
+				log.Printf("解压到目标目录失败 [%s]: %v", targetDir, err)
+			} else {
+				log.Printf("成功解压原型到 Git 目录: %s", targetDir)
+
+				entryFile := resolvePrototypeEntryHTML(targetDir)
+				linkedUrl := "/linked-projects/" + filepath.ToSlash(targetRelDir) + "/" + entryFile
+
+				if e.Record.GetString("url") != linkedUrl {
+					e.Record.Set("url", linkedUrl)
+					e.Record.Set("skip_diff_hook", true)
+					if err := e.App.Save(e.Record); err != nil {
+						log.Println("更新 url 字段失败:", err)
+					} else {
+						log.Println("更新 url 字段成功:", linkedUrl)
+					}
+				}
+
+				go func() {
+					if err := tryGitCommitAndPush(sourceDir, targetRelDir, projectName, versionTitle); err != nil {
+						log.Printf("[Git] 自动提交推送失败: %v", err)
+					}
+				}()
+			}
+		} else {
+			destDir := filepath.Join("pb_public", "projects", recordId)
+
+			os.RemoveAll(destDir)
+			os.MkdirAll(destDir, os.ModePerm)
+			log.Println("准备解压到文件夹:", destDir)
+
+			if err := unzip(zipPath, destDir); err != nil {
+				log.Println("解压失败:", err)
 				return nil
 			}
-			relPath, _ := filepath.Rel("pb_public", path)
-			foundIndexPath = "/" + filepath.ToSlash(relPath)
-			return filepath.SkipAll
-		})
+			log.Println("解压成功！")
 
-		if foundIndexPath == "" {
-			foundIndexPath = "/projects/" + recordId + "/index.html"
-		}
+			entryFile := resolvePrototypeEntryHTML(destDir)
+			foundIndexPath := "/projects/" + recordId + "/" + entryFile
 
-		if e.Record.GetString("url") != foundIndexPath {
-			e.Record.Set("url", foundIndexPath)
-			e.Record.Set("skip_diff_hook", true)
-			if err := e.App.Save(e.Record); err != nil {
-				log.Println("更新 url 字段失败:", err)
-			} else {
-				log.Println("更新 url 字段成功:", foundIndexPath)
+			if e.Record.GetString("url") != foundIndexPath {
+				e.Record.Set("url", foundIndexPath)
+				e.Record.Set("skip_diff_hook", true)
+				if err := e.App.Save(e.Record); err != nil {
+					log.Println("更新 url 字段失败:", err)
+				} else {
+					log.Println("更新 url 字段成功:", foundIndexPath)
+				}
 			}
 		}
 
@@ -310,6 +405,30 @@ func main() {
 	}
 }
 
+// resolvePhysicalDirectoryForPrototype: 解析版本记录对应的物理目录路径（支持 linked-projects 与 pb_public）
+func resolvePhysicalDirectoryForPrototype(record *core.Record) string {
+	url := record.GetString("url")
+	if strings.HasPrefix(url, "/linked-projects/") {
+		sourceDir := getEffectiveSourceDir()
+		if sourceDir != "" {
+			rel := strings.TrimPrefix(url, "/linked-projects/")
+			full := filepath.Join(sourceDir, filepath.FromSlash(rel))
+			if info, err := os.Stat(full); err == nil {
+				if info.IsDir() {
+					return full
+				}
+				return filepath.Dir(full)
+			}
+			return filepath.Dir(full)
+		}
+	}
+	destDir := filepath.Join("pb_public", "projects", record.Id)
+	if _, err := os.Stat(destDir); err == nil {
+		return destDir
+	}
+	return ""
+}
+
 // recalculateDiffForRecord : 辅助函数：负责为传入的 currentRecord 寻找其历史前任，并计算和保存 Diff
 func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 	projectId := currentRecord.GetString("project")
@@ -318,10 +437,13 @@ func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 	}
 
 	recordId := currentRecord.Id
-	destDir := filepath.Join("pb_public", "projects", recordId)
+	destDir := resolvePhysicalDirectoryForPrototype(currentRecord)
+	if destDir == "" {
+		destDir = filepath.Join("pb_public", "projects", recordId)
+	}
 	var oldDestDir string
 
-	log.Printf("所属项目 ID: %s，正在为 %s 查找历史版本...", projectId, recordId)
+	log.Printf("所属项目 ID: %s，正在为 %s 查找历史版本 (当前目录: %s)...", projectId, recordId, destDir)
 
 	// 查找该项目下，创建时间早于当前记录的最新一条数据
 	prevRecords, err := app.FindRecordsByFilter(
@@ -339,14 +461,14 @@ func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 
 	if err == nil && len(prevRecords) > 0 {
 		oldRecord := prevRecords[0]
-		oldDestDir = filepath.Join("pb_public", "projects", oldRecord.Id)
+		oldDestDir = resolvePhysicalDirectoryForPrototype(oldRecord)
 		log.Printf("找到上一个版本，记录 ID: %s, 文件夹路径: %s", oldRecord.Id, oldDestDir)
 	} else {
 		log.Println("未找到该项目的上个版本记录，当前记录将作为初始版本。")
 	}
 
 	var diffJsonStr string
-	if oldDestDir != "" {
+	if oldDestDir != "" && destDir != "" {
 		if _, err := os.Stat(oldDestDir); err == nil {
 			log.Println("开始跨纪录比对 HTML 纯文本差异...")
 			diffJsonStr, _ = CompareAndSaveDiff(oldDestDir, destDir)
@@ -365,8 +487,114 @@ func recalculateDiffForRecord(app core.App, currentRecord *core.Record) error {
 	return app.Save(currentRecord)
 }
 
+func tryGitCommitAndPush(sourceDir string, targetRelDir string, projectName string, versionTitle string) error {
+	gitDir := filepath.Join(sourceDir, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		log.Printf("[Git] 源目录 %s 不是 Git 仓库，跳过 Git 提交", sourceDir)
+		return nil
+	}
+
+	log.Printf("[Git] 准备提交并推送新版本到 Git 仓库: %s (目录: %s)", sourceDir, targetRelDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// 1. git add
+	cmdAdd := exec.CommandContext(ctx, "git", "-C", sourceDir, "add", "-A", filepath.ToSlash(targetRelDir))
+	cmdAdd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmdAdd.CombinedOutput(); err != nil {
+		log.Printf("[Git] git add 失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git add failed: %w", err)
+	}
+
+	// 2. git commit
+	commitMsg := fmt.Sprintf("docs(prototype): 上传 [%s] - [%s]", projectName, versionTitle)
+	cmdCommit := exec.CommandContext(ctx, "git", "-C", sourceDir, "commit", "-m", commitMsg)
+	cmdCommit.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmdCommit.CombinedOutput(); err != nil {
+		outStr := strings.TrimSpace(string(out))
+		if strings.Contains(outStr, "nothing to commit") || strings.Contains(outStr, "无文件要提交") || strings.Contains(outStr, "clean") {
+			log.Printf("[Git] 没有新的文件变动需要提交: %s", outStr)
+		} else {
+			log.Printf("[Git] git commit 失败: %v, 输出: %s", err, outStr)
+			return fmt.Errorf("git commit failed: %w", err)
+		}
+	} else {
+		log.Printf("[Git] git commit 成功: %s", strings.TrimSpace(string(out)))
+	}
+
+	// 3. 测试阶段默认不推送到远程仓库（仅在显式配置 ENABLE_GIT_PUSH=true 时才推送）
+	if os.Getenv("ENABLE_GIT_PUSH") != "true" && os.Getenv("AUTO_GIT_PUSH") != "true" {
+		log.Printf("[Git] 当前处于测试阶段，已跳过远程 git push（本地修改与 Git Commit 已完成）")
+		return nil
+	}
+
+	// 获取当前分支并 git push
+	branchCmd := exec.CommandContext(ctx, "git", "-C", sourceDir, "rev-parse", "--abbrev-ref", "HEAD")
+	branchCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	branchOut, err := branchCmd.Output()
+	branch := "main"
+	if err == nil && len(branchOut) > 0 {
+		branch = strings.TrimSpace(string(branchOut))
+	}
+
+	cmdPush := exec.CommandContext(ctx, "git", "-C", sourceDir, "push", "origin", branch)
+	cmdPush.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmdPush.CombinedOutput(); err != nil {
+		log.Printf("[Git] git push origin %s 失败: %v, 输出: %s", branch, err, strings.TrimSpace(string(out)))
+		return fmt.Errorf("git push failed: %w", err)
+	} else {
+		log.Printf("[Git] git push origin %s 成功: %s", branch, strings.TrimSpace(string(out)))
+	}
+
+	return nil
+}
+
+func sanitizePathComponent(name string) string {
+	invalidChars := []string{"/", "\\", ":", "*", "?", "\"", "<", ">", "|"}
+	result := strings.TrimSpace(name)
+	for _, char := range invalidChars {
+		result = strings.ReplaceAll(result, char, "_")
+	}
+	result = strings.Trim(result, ". ")
+	if result == "" {
+		result = "unnamed"
+	}
+	return result
+}
+
+func tryGitPull(sourceDir string) {
+	gitDir := filepath.Join(sourceDir, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		return
+	}
+
+	log.Printf("[Git] 检测到源目录为 Git 仓库，准备更新代码: %s", sourceDir)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// 1. git checkout . -f (清理未提交的修改，保证工作区干净)
+	cmdCheckout := exec.CommandContext(ctx, "git", "-C", sourceDir, "checkout", ".", "-f")
+	cmdCheckout.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmdCheckout.CombinedOutput(); err != nil {
+		log.Printf("[Git] 执行 git checkout . -f 失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
+	} else if len(out) > 0 {
+		log.Printf("[Git] 执行 git checkout . -f 成功: %s", strings.TrimSpace(string(out)))
+	}
+
+	// 2. git pull
+	cmdPull := exec.CommandContext(ctx, "git", "-C", sourceDir, "pull")
+	cmdPull.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if out, err := cmdPull.CombinedOutput(); err != nil {
+		log.Printf("[Git] 执行 git pull 失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
+	} else {
+		log.Printf("[Git] 执行 git pull 成功: %s", strings.TrimSpace(string(out)))
+	}
+}
+
 func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, error) {
-	sourceDir := strings.TrimSpace(os.Getenv("PROTOTYPE_SOURCE_DIR"))
+	sourceDir := getEffectiveSourceDir()
 	if sourceDir == "" {
 		return nil, errSourceDirNotConfigured
 	}
@@ -383,6 +611,9 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 	if !info.IsDir() {
 		return nil, errors.New("PROTOTYPE_SOURCE_DIR 不是目录")
 	}
+
+	// 如果源目录是 Git 仓库，先拉取最新代码并重置工作区
+	tryGitPull(absSourceDir)
 
 	log.Printf("[Scanner] 开始分析并载入原型路径，源目录: %s", absSourceDir)
 	paths, skipped, err := discoverPrototypePaths(absSourceDir)
@@ -432,7 +663,7 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 			log.Printf("[Scanner] 项目记录更新成功 [%s] (ID: %s)", relPath, projectRecord.Id)
 		}
 
-		_, createdVersion, err := ensurePrototypeRecord(app, prototypeCollection, mapping, relPath, projectRecord, creatorID)
+		_, createdVersion, err := ensurePrototypeRecord(app, prototypeCollection, mapping, absSourceDir, relPath, projectRecord, creatorID)
 		if err != nil {
 			log.Printf("[Scanner] 同步版本记录失败 [%s]: %v", relPath, err)
 			summary.SkippedPaths = append(summary.SkippedPaths, relPath+": [Version] "+err.Error())
@@ -449,93 +680,247 @@ func syncPrototypeDirectories(app core.App, creatorID string) (*syncSummary, err
 		summary.SyncedProjects++
 	}
 
+	// 收集当前同步成功的 Project ID 与 Version ID
+	syncedProjectIDs := make(map[string]bool, len(paths))
+	syncedVersionIDs := make(map[string]bool, len(paths))
+	for _, projID := range mapping.Projects {
+		if projID != "" {
+			syncedProjectIDs[projID] = true
+		}
+	}
+	for _, verID := range mapping.Versions {
+		if verID != "" {
+			syncedVersionIDs[verID] = true
+		}
+	}
+
+	// 清理 mapping 中多余或已失效的路径键
+	validPathsSet := make(map[string]bool, len(paths))
+	for _, p := range paths {
+		validPathsSet[p] = true
+	}
+	for relPath := range mapping.Projects {
+		if !validPathsSet[relPath] {
+			delete(mapping.Projects, relPath)
+		}
+	}
+	for relPath := range mapping.Versions {
+		if !validPathsSet[relPath] {
+			delete(mapping.Versions, relPath)
+		}
+	}
+
+	// 严格清理：数据库中所有属于 [AUTO_SOURCE] 自动扫描但未在本次同步列表中的孤立/重复项目和版本
+	if allAutoProjects, err := app.FindRecordsByFilter("rp_project", "source_type = 'auto' || is_auto = true || description ~ {:prefix}", "", 0, 0, map[string]any{"prefix": autoSourcePrefix}); err == nil {
+		for _, projRecord := range allAutoProjects {
+			if !syncedProjectIDs[projRecord.Id] {
+				log.Printf("[Scanner] 清理孤立/重复的自动扫描项目: %s (ID: %s)", projRecord.GetString("description"), projRecord.Id)
+				if verRecords, err := app.FindRecordsByFilter("rp_prototype", "project = {:projID}", "", 0, 0, map[string]any{"projID": projRecord.Id}); err == nil {
+					for _, vr := range verRecords {
+						_ = app.Delete(vr)
+					}
+				}
+				if err := app.Delete(projRecord); err == nil {
+					summary.DeletedProjects++
+				}
+			}
+		}
+	}
+
+	// 清理多余孤立的自动版本
+	if allAutoVersions, err := app.FindRecordsByFilter("rp_prototype", "source_type = 'auto' || is_auto = true || remark ~ {:prefix}", "", 0, 0, map[string]any{"prefix": autoSourcePrefix}); err == nil {
+		for _, verRecord := range allAutoVersions {
+			if !syncedVersionIDs[verRecord.Id] {
+				_ = app.Delete(verRecord)
+			}
+		}
+	}
+
 	if err := saveScanMapping(app, mapping); err != nil {
 		log.Printf("[Scanner] 保存扫描 mapping 记录发生错误: %v", err)
 		return nil, err
 	}
 
 	sort.Strings(summary.SkippedPaths)
-	log.Printf("[Scanner] === 同步全部完成。扫描发现项目数: %d, 成功同步项目数: %d, 新增项目数: %d, 更新项目数: %d ===",
-		summary.ScannedProjects, summary.SyncedProjects, summary.CreatedProjects, summary.UpdatedProjects)
+	log.Printf("[Scanner] === 同步全部完成。扫描发现项目数: %d, 成功同步项目数: %d, 新增项目数: %d, 更新项目数: %d, 清理移除项目数: %d ===",
+		summary.ScannedProjects, summary.SyncedProjects, summary.CreatedProjects, summary.UpdatedProjects, summary.DeletedProjects)
 
 	return summary, nil
 }
 
 func discoverPrototypePaths(sourceDir string) ([]string, []string, error) {
-	log.Printf("[Scanner] 开始扫描源目录: %s", sourceDir)
-	entries, err := os.ReadDir(sourceDir)
-	if err != nil {
-		log.Printf("[Scanner] 读取目录失败: %v", err)
-		return nil, nil, err
-	}
+	log.Printf("[Scanner] 开始多层级深度扫描源目录: %s", sourceDir)
 
 	var paths []string
 	var skipped []string
 
-	for _, entry := range entries {
-		// 判断是否是文件夹（支持软链接）
-		isDir := isEntryDir(sourceDir, entry)
-		log.Printf("[Scanner] [一级条目] Name: %s, IsDir: %v, Type: %s", entry.Name(), isDir, entry.Type())
+	scanDirRecursive(sourceDir, "", 0, 8, &paths, &skipped)
 
-		if !isDir || isHiddenName(entry.Name()) {
-			continue
-		}
-
-		topLevelPath := entry.Name()
-		topLevelAbs := filepath.Join(sourceDir, topLevelPath)
-		hasIndex, err := containsIndexHTML(topLevelAbs)
-		if err != nil {
-			log.Printf("[Scanner] [一级条目检查] 检查含有 index.html 失败 [%s]: %v", topLevelPath, err)
-			skipped = append(skipped, topLevelPath+": "+err.Error())
-			continue
-		}
-		if hasIndex {
-			log.Printf("[Scanner] [一级条目匹配] 发现含有 index.html, 作为项目路径: %s", topLevelPath)
-			paths = append(paths, topLevelPath)
-			continue
-		}
-
-		// 如果一级目录没有 index.html，扫描二级子目录
-		log.Printf("[Scanner] [一级条目未匹配] 正在深入扫描二级子目录: %s", topLevelPath)
-		childEntries, err := os.ReadDir(topLevelAbs)
-		if err != nil {
-			log.Printf("[Scanner] [二级条目读取] 读取子目录失败 [%s]: %v", topLevelPath, err)
-			skipped = append(skipped, topLevelPath+": "+err.Error())
-			continue
-		}
-
-		for _, child := range childEntries {
-			isChildDir := isEntryDir(topLevelAbs, child)
-			log.Printf("[Scanner]   [二级子条目] Name: %s/%s, IsDir: %v, Type: %s", topLevelPath, child.Name(), isChildDir, child.Type())
-
-			if !isChildDir || isHiddenName(child.Name()) {
-				continue
-			}
-
-			childPath := filepath.Join(topLevelPath, child.Name())
-			childAbs := filepath.Join(sourceDir, childPath)
-			hasIndex, err := containsIndexHTML(childAbs)
-			if err != nil {
-				log.Printf("[Scanner]   [二级条目检查] 检查含有 index.html 失败 [%s]: %v", childPath, err)
-				skipped = append(skipped, childPath+": "+err.Error())
-				continue
-			}
-			if hasIndex {
-				log.Printf("[Scanner]   [二级条目匹配] 发现含有 index.html, 作为项目路径: %s", childPath)
-				paths = append(paths, filepath.ToSlash(childPath))
-			}
-		}
+	timeCache := make(map[string]time.Time, len(paths))
+	for _, p := range paths {
+		timeCache[p] = resolveFolderTime(sourceDir, p)
 	}
 
 	sort.Slice(paths, func(i, j int) bool {
-		timeI := resolveFolderTime(sourceDir, paths[i])
-		timeJ := resolveFolderTime(sourceDir, paths[j])
+		timeI := timeCache[paths[i]]
+		timeJ := timeCache[paths[j]]
 		if timeI.Equal(timeJ) {
 			return paths[i] < paths[j]
 		}
 		return timeI.After(timeJ)
 	})
+
+	log.Printf("[Scanner] 深度扫描完成。共发现有效项目路径: %d 个, 忽略/错误路径: %d 个", len(paths), len(skipped))
 	return paths, skipped, nil
+}
+
+func scanDirRecursive(sourceDir string, currentRelPath string, depth int, maxDepth int, paths *[]string, skipped *[]string) {
+	if depth > maxDepth {
+		return
+	}
+
+	currentAbs := filepath.Join(sourceDir, currentRelPath)
+
+	if currentRelPath != "" {
+		baseName := filepath.Base(currentRelPath)
+		if isHiddenName(baseName) || isAxureResourceDir(baseName) {
+			return
+		}
+
+		isProto, err := isPrototypeDir(currentAbs)
+		if err != nil {
+			log.Printf("[Scanner] 检查目录失败 [%s]: %v", currentRelPath, err)
+			*skipped = append(*skipped, currentRelPath+": "+err.Error())
+			return
+		}
+
+		if isProto {
+			log.Printf("[Scanner] [命中原型项目] 深度 %d: %s", depth, currentRelPath)
+			*paths = append(*paths, filepath.ToSlash(currentRelPath))
+			// 命中原型根目录后，不再向其内部子目录递归
+			return
+		}
+	}
+
+	entries, err := os.ReadDir(currentAbs)
+	if err != nil {
+		log.Printf("[Scanner] 读取目录失败 [%s]: %v", currentRelPath, err)
+		if depth > 0 {
+			*skipped = append(*skipped, currentRelPath+": "+err.Error())
+		}
+		return
+	}
+
+	for _, entry := range entries {
+		if !isEntryDir(currentAbs, entry) || isHiddenName(entry.Name()) || isAxureResourceDir(entry.Name()) {
+			continue
+		}
+
+		childRelPath := entry.Name()
+		if currentRelPath != "" {
+			childRelPath = filepath.Join(currentRelPath, entry.Name())
+		}
+
+		scanDirRecursive(sourceDir, childRelPath, depth+1, maxDepth, paths, skipped)
+	}
+}
+
+func isAxureResourceDir(name string) bool {
+	lower := strings.ToLower(name)
+	return lower == "data" || lower == "files" || lower == "images" || lower == "plugins" || lower == "resources" || lower == "__macosx"
+}
+
+func isPrototypeDir(dir string) (bool, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return false, err
+	}
+
+	// 任何有效的原型项目根目录必须包含至少一个可访问的 HTML 文件
+	hasHTML := false
+	hasAxureAssetDir := false
+	hasStandardEntry := false
+
+	standardFiles := map[string]bool{
+		"index.html":   true,
+		"index.htm":    true,
+		"start.html":   true,
+		"app.html":     true,
+		"default.html": true,
+	}
+
+	for _, entry := range entries {
+		if isHiddenName(entry.Name()) {
+			continue
+		}
+		if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".html") {
+			hasHTML = true
+			if standardFiles[strings.ToLower(entry.Name())] {
+				hasStandardEntry = true
+			}
+		} else if isEntryDir(dir, entry) && isAxureResourceDir(entry.Name()) {
+			hasAxureAssetDir = true
+		}
+	}
+
+	// 如果目录下没有任何 HTML 文件，则绝对不是有效的原型（避免空目录/Git 残留空文件夹被误判）
+	if !hasHTML {
+		return false, nil
+	}
+
+	if hasStandardEntry {
+		return true, nil
+	}
+
+	if fileExists(filepath.Join(dir, "data", "document.js")) ||
+		fileExists(filepath.Join(dir, "data", "styles.css")) ||
+		dirExists(filepath.Join(dir, "resources", "scripts", "axure")) ||
+		dirExists(filepath.Join(dir, "resources", "scripts")) {
+		return true, nil
+	}
+
+	return hasAxureAssetDir, nil
+}
+
+func resolvePrototypeEntryHTML(dir string) string {
+	standardFiles := []string{"index.html", "start.html", "app.html", "index.htm", "default.html"}
+	for _, name := range standardFiles {
+		if fileExists(filepath.Join(dir, name)) {
+			return name
+		}
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err == nil {
+		var htmlFiles []string
+		for _, entry := range entries {
+			if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".html") && !isHiddenName(entry.Name()) {
+				htmlFiles = append(htmlFiles, entry.Name())
+			}
+		}
+		if len(htmlFiles) > 0 {
+			sort.Strings(htmlFiles)
+			return htmlFiles[0]
+		}
+	}
+
+	return "index.html"
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	if err == nil {
+		return !info.IsDir()
+	}
+	return false
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	if err == nil {
+		return info.IsDir()
+	}
+	return false
 }
 
 var (
@@ -562,20 +947,78 @@ var (
 
 	// 8. 仅含年: 2026年
 	reYearOnly = regexp.MustCompile(`(?i)(20\d{2})年`)
+
+	// 9. 年前/年以前: 2025年前, 2025年以前
+	reYearBefore = regexp.MustCompile(`(?i)(20\d{2})年以?前`)
 )
 
 func resolveFolderTime(sourceDir string, relPath string) time.Time {
-	projectDir := filepath.Join(sourceDir, filepath.FromSlash(relPath))
-	fsModTime := getDirectoryModTime(projectDir)
-	return extractTimeFromPath(relPath, fsModTime)
+	// 获取 Git 提交时间（若无则获取文件修改时间）作为辅助参考
+	var refTime time.Time
+	if gitTime, ok := getGitCommitTime(sourceDir, relPath); ok && !gitTime.IsZero() {
+		refTime = gitTime
+	} else {
+		projectDir := filepath.Join(sourceDir, filepath.FromSlash(relPath))
+		refTime = getDirectoryModTime(projectDir)
+	}
+
+	return extractTimeFromPath(relPath, refTime)
+}
+
+func getGitCommitTime(sourceDir string, relPath string) (time.Time, bool) {
+	gitDir := filepath.Join(sourceDir, ".git")
+	if _, err := os.Stat(gitDir); err != nil {
+		return time.Time{}, false
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "git", "-C", sourceDir, "log", "-1", "--format=%ct", "--", filepath.ToSlash(relPath))
+	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	out, err := cmd.Output()
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	raw := strings.TrimSpace(string(out))
+	if raw == "" {
+		return time.Time{}, false
+	}
+
+	sec, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil {
+		return time.Time{}, false
+	}
+
+	return time.Unix(sec, 0), true
 }
 
 func extractTimeFromPath(relPath string, fallback time.Time) time.Time {
 	normPath := filepath.ToSlash(relPath)
 	var year, month, day int
 
-	// 优先匹配完整的年月日
-	if m := reFullDate.FindStringSubmatch(normPath); len(m) == 4 {
+	// 0. 特殊处理 "2025年前", "2025年以前" 等历史归档前缀
+	if m := reYearBefore.FindStringSubmatch(normPath); len(m) == 2 {
+		y, _ := strconv.Atoi(m[1])
+		year = y - 1 // 2024
+		month = 12
+		day = 31
+
+		// 检查归档目录内部是否还有子年份/月份
+		subPath := normPath[strings.Index(normPath, m[0])+len(m[0]):]
+		if subM := reYearMonth.FindStringSubmatch(subPath); len(subM) == 3 {
+			subY, _ := strconv.Atoi(subM[1])
+			if subY <= year {
+				year = subY
+			}
+			month, _ = strconv.Atoi(subM[2])
+			day = 1
+		} else if subM := reMonthOnly.FindStringSubmatch(subPath); len(subM) == 2 {
+			month, _ = strconv.Atoi(subM[1])
+			day = 1
+		}
+	} else if m := reFullDate.FindStringSubmatch(normPath); len(m) == 4 {
 		year, _ = strconv.Atoi(m[1])
 		month, _ = strconv.Atoi(m[2])
 		day, _ = strconv.Atoi(m[3])
@@ -610,40 +1053,41 @@ func extractTimeFromPath(relPath string, fallback time.Time) time.Time {
 		}
 	}
 
-	// 如果路径中没有任何时间特征，回退到文件系统修改时间
+	// 如果路径中没有任何时间特征，使用 Git 提交时间或文件系统修改时间
 	if year == 0 && month == 0 && day == 0 {
 		if fallback.IsZero() {
-			return time.Now()
+			return time.Date(1970, 1, 1, 0, 0, 0, 0, time.UTC)
 		}
 		return fallback
 	}
 
-	refTime := fallback
-	if refTime.IsZero() {
-		refTime = time.Now()
+	// 补充缺失的年份或月份
+	if year == 0 {
+		if !fallback.IsZero() && fallback.Year() < 2026 {
+			year = fallback.Year()
+		} else {
+			year = 2024
+		}
 	}
 
-	if year == 0 {
-		year = refTime.Year()
-	}
 	if month == 0 {
-		month = int(refTime.Month())
+		month = 1
 	}
 
 	if day == 0 {
-		maxDays := daysInMonth(year, time.Month(month))
-		d := refTime.Day()
-		if d > maxDays {
-			d = maxDays
+		if !fallback.IsZero() && fallback.Year() == year && int(fallback.Month()) == month {
+			day = fallback.Day()
+		} else {
+			day = 1
 		}
-		if d < 1 {
-			d = 1
-		}
-		day = d
 	}
 
-	hour, min, sec := refTime.Hour(), refTime.Minute(), refTime.Second()
-	nsec := refTime.Nanosecond()
+	var hour, min, sec, nsec int
+	if !fallback.IsZero() {
+		// 无论 fallback 处于哪个月，均保留时分秒与纳秒，确保同月份下的项目能依据最新修改时间精准排序
+		hour, min, sec = fallback.Hour(), fallback.Minute(), fallback.Second()
+		nsec = fallback.Nanosecond()
+	}
 
 	return time.Date(year, time.Month(month), day, hour, min, sec, nsec, time.UTC)
 }
@@ -659,18 +1103,21 @@ func getDirectoryModTime(dirPath string) time.Time {
 	}
 	latest := info.ModTime()
 
-	entries, err := os.ReadDir(dirPath)
-	if err == nil {
-		for _, entry := range entries {
-			if isHiddenName(entry.Name()) {
-				continue
-			}
-			entryInfo, err := entry.Info()
-			if err == nil && entryInfo.ModTime().After(latest) {
-				latest = entryInfo.ModTime()
-			}
+	_ = filepath.WalkDir(dirPath, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
 		}
-	}
+		if isHiddenName(d.Name()) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entryInfo, err := d.Info(); err == nil && entryInfo.ModTime().After(latest) {
+			latest = entryInfo.ModTime()
+		}
+		return nil
+	})
 	return latest
 }
 
@@ -683,6 +1130,13 @@ func ensureProjectRecord(app core.App, collection *core.Collection, mapping *sca
 		}
 	}
 
+	desc := autoDescription(relPath)
+	if record, err := app.FindFirstRecordByFilter(collection, "description = {:desc}", map[string]any{"desc": desc}); err == nil {
+		applyProjectFields(record, sourceDir, relPath, displayName, creatorID)
+		mapping.Projects[relPath] = record.Id
+		return record, false, app.Save(record)
+	}
+
 	record := core.NewRecord(collection)
 	applyProjectFields(record, sourceDir, relPath, displayName, creatorID)
 	if err := app.Save(record); err != nil {
@@ -693,17 +1147,17 @@ func ensureProjectRecord(app core.App, collection *core.Collection, mapping *sca
 	return record, true, nil
 }
 
-func ensurePrototypeRecord(app core.App, collection *core.Collection, mapping *scanMapping, relPath string, projectRecord *core.Record, creatorID string) (*core.Record, bool, error) {
+func ensurePrototypeRecord(app core.App, collection *core.Collection, mapping *scanMapping, sourceDir string, relPath string, projectRecord *core.Record, creatorID string) (*core.Record, bool, error) {
 	if id := mapping.Versions[relPath]; id != "" {
 		record, err := app.FindFirstRecordByFilter(collection, "id = {:id}", map[string]any{"id": id})
 		if err == nil {
-			applyPrototypeFields(record, relPath, projectRecord.Id, creatorID)
+			applyPrototypeFields(record, sourceDir, relPath, projectRecord.Id, creatorID)
 			return record, false, app.Save(record)
 		}
 	}
 
 	record := core.NewRecord(collection)
-	applyPrototypeFields(record, relPath, projectRecord.Id, creatorID)
+	applyPrototypeFields(record, sourceDir, relPath, projectRecord.Id, creatorID)
 	if err := app.Save(record); err != nil {
 		return nil, false, err
 	}
@@ -716,6 +1170,8 @@ func applyProjectFields(record *core.Record, sourceDir string, relPath string, d
 	setFieldIfExists(record, "name", displayName)
 	setFieldIfExists(record, "description", autoDescription(relPath))
 	setFieldIfExists(record, "creator", creatorID)
+	setFieldIfExists(record, "source_type", "auto")
+	setFieldIfExists(record, "is_auto", true)
 
 	folderTime := resolveFolderTime(sourceDir, relPath)
 	setFieldIfExists(record, "folder_time", folderTime)
@@ -732,12 +1188,16 @@ func applyProjectFields(record *core.Record, sourceDir string, relPath string, d
 	}
 }
 
-func applyPrototypeFields(record *core.Record, relPath string, projectID string, creatorID string) {
+func applyPrototypeFields(record *core.Record, sourceDir string, relPath string, projectID string, creatorID string) {
 	setFieldIfExists(record, "project", projectID)
 	setFieldIfExists(record, "title", autoVersionTitle)
 	setFieldIfExists(record, "remark", autoDescription(relPath))
 	setFieldIfExists(record, "status", "approved")
-	setFieldIfExists(record, "url", "/linked-projects/"+filepath.ToSlash(relPath)+"/index.html")
+	setFieldIfExists(record, "source_type", "auto")
+	setFieldIfExists(record, "is_auto", true)
+
+	entryFile := resolvePrototypeEntryHTML(filepath.Join(sourceDir, filepath.FromSlash(relPath)))
+	setFieldIfExists(record, "url", "/linked-projects/"+filepath.ToSlash(relPath)+"/"+entryFile)
 	setFieldIfExists(record, "creator", creatorID)
 	setFieldIfExists(record, "skip_diff_hook", true)
 }
@@ -857,17 +1317,6 @@ func isRasterImage(ext string) bool {
 
 func isSupportedProjectImage(name string) bool {
 	return isRasterImage(filepath.Ext(name))
-}
-
-func containsIndexHTML(dir string) (bool, error) {
-	info, err := os.Stat(filepath.Join(dir, "index.html"))
-	if err == nil {
-		return !info.IsDir(), nil
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		return false, nil
-	}
-	return false, err
 }
 
 func isHiddenName(name string) bool {

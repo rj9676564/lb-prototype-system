@@ -93,6 +93,7 @@ func upgradePrototypeCollection(app core.App) error {
 	addFieldIfMissing(collection, &core.FileField{
 		Name:      "file",
 		MaxSelect: 1,
+		MaxSize:   524288000,
 		MimeTypes: []string{"application/zip", "application/x-zip-compressed", "application/octet-stream"},
 	})
 	addFieldIfMissing(collection, &core.JSONField{
@@ -134,8 +135,8 @@ func updateProjectRules(app core.App) error {
 		return nil
 	}
 
-	collection.ListRule = stringPtr(anyAuthRule)
-	collection.ViewRule = stringPtr(anyAuthRule)
+	collection.ListRule = stringPtr("")
+	collection.ViewRule = stringPtr("")
 	collection.CreateRule = stringPtr(anyAuthRule)
 	collection.UpdateRule = stringPtr(ownerOnlyRule)
 	collection.DeleteRule = stringPtr(ownerOnlyRule)
@@ -192,8 +193,8 @@ func updatePrototypeRules(app core.App) error {
 		return nil
 	}
 
-	collection.ListRule = stringPtr(prototypeVisibleRule)
-	collection.ViewRule = stringPtr(prototypeVisibleRule)
+	collection.ListRule = stringPtr("")
+	collection.ViewRule = stringPtr("")
 	collection.CreateRule = stringPtr(anyAuthRule)
 	collection.UpdateRule = stringPtr(ownerOnlyRule)
 	collection.DeleteRule = stringPtr(ownerOnlyRule)
