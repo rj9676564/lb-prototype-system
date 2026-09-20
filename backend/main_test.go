@@ -1,9 +1,55 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
+
+func TestResolveUploadTargetRelDir(t *testing.T) {
+	now := time.Date(2026, time.October, 8, 12, 0, 0, 0, time.Local)
+
+	t.Run("existing scanned project overwrites project root", func(t *testing.T) {
+		got := resolveUploadTargetRelDir("2026年10月/扫码点餐v1.03需求", "扫码点餐v1.03需求", now)
+		want := filepath.Join("2026年10月", "扫码点餐v1.03需求")
+		if got != want {
+			t.Fatalf("resolveUploadTargetRelDir() = %q; want %q", got, want)
+		}
+	})
+
+	t.Run("manual project uses current month project root", func(t *testing.T) {
+		got := resolveUploadTargetRelDir("", "扫码/点餐", now)
+		want := filepath.Join("2026年10月", "扫码_点餐")
+		if got != want {
+			t.Fatalf("resolveUploadTargetRelDir() = %q; want %q", got, want)
+		}
+	})
+}
+
+func TestCopyDirectory(t *testing.T) {
+	sourceDir := t.TempDir()
+	targetDir := filepath.Join(t.TempDir(), "snapshot")
+	want := []byte("prototype")
+	sourceFile := filepath.Join(sourceDir, "resources", "index.html")
+	if err := os.MkdirAll(filepath.Dir(sourceFile), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourceFile, want, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := copyDirectory(sourceDir, targetDir); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(targetDir, "resources", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("copied content = %q; want %q", got, want)
+	}
+}
 
 func TestExtractTimeFromPath(t *testing.T) {
 	cases := []struct {
@@ -96,4 +142,3 @@ func TestExtractTimeFromPath(t *testing.T) {
 		t.Errorf("Expected 2026年10月 (%v) to be after 2025年前 (%v)", t2026Oct, t2025Before)
 	}
 }
-

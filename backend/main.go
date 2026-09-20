@@ -258,28 +258,28 @@ func main() {
 			if versionTitle == "" {
 				versionTitle = "未命名版本"
 			}
-			cleanVersion := sanitizePathComponent(versionTitle)
-
-			var targetRelDir string
-			if projectRelBase != "" {
-				// 若所选项目已有归档目录（例如 2026年11月/存量设备升级-美团单链需求），直接归入该项目名下！
-				targetRelDir = filepath.Join(projectRelBase, cleanVersion)
-			} else {
-				now := time.Now()
-				yearMonth := fmt.Sprintf("%d年%d月", now.Year(), int(now.Month()))
-				cleanProject := sanitizePathComponent(projectName)
-				targetRelDir = filepath.Join(yearMonth, cleanProject, cleanVersion)
-			}
+			targetRelDir := resolveUploadTargetRelDir(projectRelBase, projectName, time.Now())
 
 			targetDir := filepath.Join(sourceDir, filepath.FromSlash(targetRelDir))
+			snapshotDir := filepath.Join("pb_public", "projects", recordId)
 
-			os.RemoveAll(targetDir)
-			if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
+			if err := snapshotPreviousPrototypeDirectory(e.App, e.Record, targetDir); err != nil {
+				log.Printf("保存上一版本快照失败 [%s]: %v", targetDir, err)
+			}
+
+			os.RemoveAll(snapshotDir)
+			if err := os.MkdirAll(snapshotDir, os.ModePerm); err != nil {
+				log.Printf("创建版本快照目录失败 [%s]: %v", snapshotDir, err)
+			} else if err := unzip(zipPath, snapshotDir); err != nil {
+				log.Printf("解压版本快照失败 [%s]: %v", snapshotDir, err)
+			} else if err := os.RemoveAll(targetDir); err != nil {
+				log.Printf("清理项目目录失败 [%s]: %v", targetDir, err)
+			} else if err := os.MkdirAll(targetDir, os.ModePerm); err != nil {
 				log.Printf("创建目标目录失败 [%s]: %v", targetDir, err)
-			} else if err := unzip(zipPath, targetDir); err != nil {
-				log.Printf("解压到目标目录失败 [%s]: %v", targetDir, err)
+			} else if err := copyDirectory(snapshotDir, targetDir); err != nil {
+				log.Printf("覆盖目标目录失败 [%s]: %v", targetDir, err)
 			} else {
-				log.Printf("成功解压原型到 Git 目录: %s", targetDir)
+				log.Printf("成功覆盖原型 Git 目录: %s", targetDir)
 
 				entryFile := resolvePrototypeEntryHTML(targetDir)
 				linkedUrl := "/linked-projects/" + filepath.ToSlash(targetRelDir) + "/" + entryFile
@@ -407,6 +407,11 @@ func main() {
 
 // resolvePhysicalDirectoryForPrototype: 解析版本记录对应的物理目录路径（支持 linked-projects 与 pb_public）
 func resolvePhysicalDirectoryForPrototype(record *core.Record) string {
+	snapshotDir := filepath.Join("pb_public", "projects", record.Id)
+	if info, err := os.Stat(snapshotDir); err == nil && info.IsDir() {
+		return snapshotDir
+	}
+
 	url := record.GetString("url")
 	if strings.HasPrefix(url, "/linked-projects/") {
 		sourceDir := getEffectiveSourceDir()
@@ -422,11 +427,88 @@ func resolvePhysicalDirectoryForPrototype(record *core.Record) string {
 			return filepath.Dir(full)
 		}
 	}
-	destDir := filepath.Join("pb_public", "projects", record.Id)
-	if _, err := os.Stat(destDir); err == nil {
-		return destDir
-	}
 	return ""
+}
+
+func snapshotPreviousPrototypeDirectory(app core.App, currentRecord *core.Record, sourceDir string) error {
+	if _, err := os.Stat(sourceDir); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+
+	prevRecords, err := app.FindRecordsByFilter(
+		"rp_prototype",
+		"project = {:project} && id != {:id} && created < {:created}",
+		"-created",
+		1,
+		0,
+		map[string]any{
+			"project": currentRecord.GetString("project"),
+			"id":      currentRecord.Id,
+			"created": currentRecord.GetDateTime("created").String(),
+		},
+	)
+	if err != nil || len(prevRecords) == 0 {
+		return err
+	}
+
+	snapshotDir := filepath.Join("pb_public", "projects", prevRecords[0].Id)
+	if info, err := os.Stat(snapshotDir); err == nil && info.IsDir() {
+		return nil
+	}
+
+	if err := os.RemoveAll(snapshotDir); err != nil {
+		return err
+	}
+	return copyDirectory(sourceDir, snapshotDir)
+}
+
+func copyDirectory(sourceDir string, targetDir string) error {
+	return filepath.WalkDir(sourceDir, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+
+		relPath, err := filepath.Rel(sourceDir, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(targetDir, relPath)
+
+		if entry.IsDir() {
+			return os.MkdirAll(targetPath, os.ModePerm)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		sourceFile, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+
+		targetFile, err := os.OpenFile(targetPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode())
+		if err != nil {
+			sourceFile.Close()
+			return err
+		}
+		_, copyErr := io.Copy(targetFile, sourceFile)
+		sourceCloseErr := sourceFile.Close()
+		closeErr := targetFile.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if sourceCloseErr != nil {
+			return sourceCloseErr
+		}
+		return closeErr
+	})
 }
 
 // recalculateDiffForRecord : 辅助函数：负责为传入的 currentRecord 寻找其历史前任，并计算和保存 Diff
@@ -561,6 +643,15 @@ func sanitizePathComponent(name string) string {
 		result = "unnamed"
 	}
 	return result
+}
+
+func resolveUploadTargetRelDir(projectRelBase string, projectName string, now time.Time) string {
+	if projectRelBase != "" {
+		return filepath.Clean(projectRelBase)
+	}
+
+	yearMonth := fmt.Sprintf("%d年%d月", now.Year(), int(now.Month()))
+	return filepath.Join(yearMonth, sanitizePathComponent(projectName))
 }
 
 func tryGitPull(sourceDir string) {
