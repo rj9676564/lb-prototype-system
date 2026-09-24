@@ -68,6 +68,9 @@ func getEffectiveSourceDir() string {
 	if info, err := os.Stat("/Users/laibin/Documents/shopkeeper"); err == nil && info.IsDir() {
 		return "/Users/laibin/Documents/shopkeeper"
 	}
+	if info, err := os.Stat("/Users/laibin/Desktop/old/Documents/shopkeeper"); err == nil && info.IsDir() {
+		return "/Users/laibin/Desktop/old/Documents/shopkeeper"
+	}
 	return ""
 }
 
@@ -166,6 +169,53 @@ func main() {
 			}
 
 			return e.JSON(http.StatusOK, summary)
+		}).Bind(apis.RequireAuth())
+
+		// Git 仓库运维与同步管理接口
+		se.Router.GET("/api/git/status", func(e *core.RequestEvent) error {
+			sourceDir := getEffectiveSourceDir()
+			status := fetchGitRepoStatus(sourceDir)
+			return e.JSON(http.StatusOK, status)
+		}).Bind(apis.RequireAuth())
+
+		se.Router.GET("/api/git/logs", func(e *core.RequestEvent) error {
+			logs := getGitLogs()
+			return e.JSON(http.StatusOK, logs)
+		}).Bind(apis.RequireAuth())
+
+		se.Router.POST("/api/git/logs/clear", func(e *core.RequestEvent) error {
+			clearGitLogs()
+			return e.JSON(http.StatusOK, map[string]string{"message": "日志已清空"})
+		}).Bind(apis.RequireAuth())
+
+		se.Router.POST("/api/git/checkout", func(e *core.RequestEvent) error {
+			var req GitCheckoutRequest
+			if err := e.BindBody(&req); err != nil {
+				return e.BadRequestError("请求参数解析失败", err)
+			}
+			sourceDir := getEffectiveSourceDir()
+			res := executeGitCheckout(sourceDir, req)
+			return e.JSON(http.StatusOK, res)
+		}).Bind(apis.RequireAuth())
+
+		se.Router.POST("/api/git/pull", func(e *core.RequestEvent) error {
+			var req GitPullRequest
+			if err := e.BindBody(&req); err != nil {
+				return e.BadRequestError("请求参数解析失败", err)
+			}
+			sourceDir := getEffectiveSourceDir()
+			res := executeGitPull(sourceDir, req)
+			return e.JSON(http.StatusOK, res)
+		}).Bind(apis.RequireAuth())
+
+		se.Router.POST("/api/git/push", func(e *core.RequestEvent) error {
+			var req GitPushRequest
+			if err := e.BindBody(&req); err != nil {
+				return e.BadRequestError("请求参数解析失败", err)
+			}
+			sourceDir := getEffectiveSourceDir()
+			res := executeGitPush(sourceDir, req)
+			return e.JSON(http.StatusOK, res)
 		}).Bind(apis.RequireAuth())
 
 		se.Router.GET("/{path...}", func(e *core.RequestEvent) error {

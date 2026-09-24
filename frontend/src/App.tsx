@@ -8,7 +8,9 @@ import {
 import { 
   PrototypeList, PrototypeCreate, PrototypeEdit, PrototypeShow 
 } from "./pages/rp_prototype";
+import { GitOpsPage } from "./pages/git_ops";
 import { Header } from "./components/header";
+import { BranchesOutlined, ProjectOutlined, AppstoreOutlined } from "@ant-design/icons";
 
 import { useNotificationProvider } from "@refinedev/antd";
 import "@refinedev/antd/dist/reset.css";
@@ -163,6 +165,7 @@ function App() {
                       meta: {
                         canDelete: true,
                         label: "项目管理",
+                        icon: <ProjectOutlined />,
                       },
                     },
                     {
@@ -174,6 +177,15 @@ function App() {
                       meta: {
                         canDelete: true,
                         label: "版本管理",
+                        icon: <AppstoreOutlined />,
+                      },
+                    },
+                    {
+                      name: "git_ops",
+                      list: "/git_ops",
+                      meta: {
+                        label: "Git 同步管理",
+                        icon: <BranchesOutlined />,
                       },
                     },
                   ]}
@@ -235,6 +247,16 @@ function App() {
                           }
                         />
                         <Route path="show/:id" element={<PrototypeShow />} />
+                      </Route>
+                      <Route path="/git_ops">
+                        <Route
+                          index
+                          element={
+                            <Authenticated key="git_ops" fallback={<CatchAllNavigate to="/login" />}>
+                              <GitOpsPage />
+                            </Authenticated>
+                          }
+                        />
                       </Route>
                       <Route path="*" element={<ErrorComponent />} />
                     </Route>
