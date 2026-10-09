@@ -218,6 +218,16 @@ func main() {
 			return e.JSON(http.StatusOK, res)
 		}).Bind(apis.RequireAuth())
 
+		se.Router.POST("/api/git/exec", func(e *core.RequestEvent) error {
+			var req GitExecRequest
+			if err := e.BindBody(&req); err != nil {
+				return e.BadRequestError("请求参数解析失败", err)
+			}
+			sourceDir := getEffectiveSourceDir()
+			res := executeGitCustomCommand(sourceDir, req.Command)
+			return e.JSON(http.StatusOK, res)
+		}).Bind(apis.RequireAuth())
+
 		se.Router.GET("/{path...}", func(e *core.RequestEvent) error {
 			e.Response.Header().Del("X-Frame-Options")
 			e.Response.Header().Set("Content-Security-Policy", "frame-ancestors *")
@@ -633,7 +643,7 @@ func tryGitCommitAndPush(sourceDir string, targetRelDir string, projectName stri
 
 	// 1. git add
 	cmdAdd := exec.CommandContext(ctx, "git", "-C", sourceDir, "add", "-A", filepath.ToSlash(targetRelDir))
-	cmdAdd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmdAdd.Env = getGitEnv(ctx, sourceDir)
 	if out, err := cmdAdd.CombinedOutput(); err != nil {
 		log.Printf("[Git] git add 失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
 		return fmt.Errorf("git add failed: %w", err)
@@ -642,7 +652,7 @@ func tryGitCommitAndPush(sourceDir string, targetRelDir string, projectName stri
 	// 2. git commit
 	commitMsg := fmt.Sprintf("docs(prototype): 上传 [%s] - [%s]", projectName, versionTitle)
 	cmdCommit := exec.CommandContext(ctx, "git", "-C", sourceDir, "commit", "-m", commitMsg)
-	cmdCommit.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmdCommit.Env = getGitEnv(ctx, sourceDir)
 	if out, err := cmdCommit.CombinedOutput(); err != nil {
 		outStr := strings.TrimSpace(string(out))
 		if strings.Contains(outStr, "nothing to commit") || strings.Contains(outStr, "无文件要提交") || strings.Contains(outStr, "clean") {
@@ -663,7 +673,7 @@ func tryGitCommitAndPush(sourceDir string, targetRelDir string, projectName stri
 
 	// 获取当前分支并 git push
 	branchCmd := exec.CommandContext(ctx, "git", "-C", sourceDir, "rev-parse", "--abbrev-ref", "HEAD")
-	branchCmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	branchCmd.Env = getGitEnv(ctx, sourceDir)
 	branchOut, err := branchCmd.Output()
 	branch := "main"
 	if err == nil && len(branchOut) > 0 {
@@ -671,7 +681,7 @@ func tryGitCommitAndPush(sourceDir string, targetRelDir string, projectName stri
 	}
 
 	cmdPush := exec.CommandContext(ctx, "git", "-C", sourceDir, "push", "origin", branch)
-	cmdPush.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmdPush.Env = getGitEnv(ctx, sourceDir)
 	if out, err := cmdPush.CombinedOutput(); err != nil {
 		log.Printf("[Git] git push origin %s 失败: %v, 输出: %s", branch, err, strings.TrimSpace(string(out)))
 		return fmt.Errorf("git push failed: %w", err)
@@ -717,7 +727,7 @@ func tryGitPull(sourceDir string) {
 
 	// 1. git checkout . -f (清理未提交的修改，保证工作区干净)
 	cmdCheckout := exec.CommandContext(ctx, "git", "-C", sourceDir, "checkout", ".", "-f")
-	cmdCheckout.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmdCheckout.Env = getGitEnv(ctx, sourceDir)
 	if out, err := cmdCheckout.CombinedOutput(); err != nil {
 		log.Printf("[Git] 执行 git checkout . -f 失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
 	} else if len(out) > 0 {
@@ -726,7 +736,7 @@ func tryGitPull(sourceDir string) {
 
 	// 2. git pull
 	cmdPull := exec.CommandContext(ctx, "git", "-C", sourceDir, "pull")
-	cmdPull.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmdPull.Env = getGitEnv(ctx, sourceDir)
 	if out, err := cmdPull.CombinedOutput(); err != nil {
 		log.Printf("[Git] 执行 git pull 失败: %v, 输出: %s", err, strings.TrimSpace(string(out)))
 	} else {
@@ -1116,7 +1126,7 @@ func getGitCommitTime(sourceDir string, relPath string) (time.Time, bool) {
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "git", "-C", sourceDir, "log", "-1", "--format=%ct", "--", filepath.ToSlash(relPath))
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = getGitEnv(ctx, sourceDir)
 	out, err := cmd.Output()
 	if err != nil {
 		return time.Time{}, false

@@ -97,6 +97,9 @@ export const GitOpsPage: React.FC = () => {
   const [pushAutoCommit, setPushAutoCommit] = useState<boolean>(true);
   const [pushForce, setPushForce] = useState<boolean>(false);
 
+  // 自定义命令执行状态
+  const [customCmd, setCustomCmd] = useState<string>("");
+
   const consoleEndRef = useRef<HTMLDivElement>(null);
 
   const getAuthHeader = () => {
@@ -251,6 +254,36 @@ export const GitOpsPage: React.FC = () => {
       message.success("日志已清空");
     } catch {
       setLogs([]);
+    }
+  };
+
+  // 执行自定义命令
+  const handleExecCommand = async (cmdToRun?: string) => {
+    const command = (cmdToRun || customCmd).trim();
+    if (!command) {
+      message.warning("请输入要执行的命令");
+      return;
+    }
+    setExecutingAction("exec");
+    try {
+      const res = await fetch(`${API_URL}/git/exec`, {
+        method: "POST",
+        headers: getAuthHeader(),
+        body: JSON.stringify({ command }),
+      });
+      const result: GitOpResponse = await res.json();
+      setLogs((prev) => [result, ...prev]);
+
+      if (result.success) {
+        message.success("命令执行成功！");
+      } else {
+        message.error(`命令执行失败: ${result.error || result.output}`);
+      }
+      await loadStatus(true);
+    } catch (err: any) {
+      message.error("执行请求异常: " + (err?.message || err));
+    } finally {
+      setExecutingAction(null);
     }
   };
 
@@ -694,6 +727,108 @@ export const GitOpsPage: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      {/* 自定义命令执行区 */}
+      <Card
+        size="small"
+        style={{
+          borderRadius: 8,
+          marginBottom: 16,
+          background: "#fafafa",
+          border: "1px solid #d9d9d9",
+        }}
+        title={
+          <Space>
+            <CodeOutlined style={{ color: "#722ed1" }} />
+            <span style={{ fontWeight: 600 }}>自定义 Git / Shell 命令执行</span>
+            <Tag color="purple">管理员运维</Tag>
+          </Space>
+        }
+      >
+        <div style={{ marginBottom: 12 }}>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            在此可直接在原型目录执行任意 Git 维护指令（例如配置用户名邮箱、设置仓库凭据、查看分支或日志等）。
+          </Text>
+        </div>
+
+        {/* 快捷常用命令标签 */}
+        <div style={{ marginBottom: 12 }}>
+          <Space wrap size={[6, 8]}>
+            <Text type="secondary" style={{ fontSize: 12 }}>常用快捷命令：</Text>
+            <Tag
+              style={{ cursor: "pointer" }}
+              color="blue"
+              onClick={() => setCustomCmd('git config user.name "laibin" && git config user.email "laibin6@gmail.com"')}
+            >
+              配置提交者身份
+            </Tag>
+            <Tag
+              style={{ cursor: "pointer" }}
+              color="blue"
+              onClick={() => setCustomCmd("git status")}
+            >
+              git status
+            </Tag>
+            <Tag
+              style={{ cursor: "pointer" }}
+              color="blue"
+              onClick={() => setCustomCmd("git remote -v")}
+            >
+              git remote -v
+            </Tag>
+            <Tag
+              style={{ cursor: "pointer" }}
+              color="blue"
+              onClick={() => setCustomCmd("git branch -a")}
+            >
+              git branch -a
+            </Tag>
+            <Tag
+              style={{ cursor: "pointer" }}
+              color="blue"
+              onClick={() => setCustomCmd("git log -n 5 --oneline")}
+            >
+              git log (近5条)
+            </Tag>
+            <Tag
+              style={{ cursor: "pointer" }}
+              color="orange"
+              onClick={() => setCustomCmd('git config credential.helper store')}
+            >
+              启用凭据持久化助手
+            </Tag>
+            <Tag
+              style={{ cursor: "pointer" }}
+              color="cyan"
+              onClick={() => setCustomCmd("git remote set-url origin https://<username>:<token>@git-repositories.juhesaas.com/xxx.git")}
+            >
+              设置带Token的Remote URL
+            </Tag>
+          </Space>
+        </div>
+
+        {/* 命令输入与执行按钮 */}
+        <Space.Compact style={{ width: "100%" }}>
+          <Input
+            prefix={<span style={{ color: "#8c8c8c", fontFamily: "monospace" }}>$</span>}
+            placeholder="输入要执行的 Git 命令，例如: git config user.name 'laibin' 或 git log -n 3"
+            value={customCmd}
+            onChange={(e) => setCustomCmd(e.target.value)}
+            onPressEnter={() => handleExecCommand()}
+            disabled={executingAction !== null}
+            allowClear
+          />
+          <Button
+            type="primary"
+            style={{ backgroundColor: "#722ed1", borderColor: "#722ed1" }}
+            onClick={() => handleExecCommand()}
+            loading={executingAction === "exec"}
+            disabled={!customCmd.trim() || executingAction !== null}
+          >
+            执行命令
+          </Button>
+        </Space.Compact>
+      </Card>
 
       {/* 终端控制台日志窗口 */}
       <Card

@@ -1,11 +1,58 @@
 package main
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
 )
+
+func TestCommitIdentityWithoutEnvironmentConfiguration(t *testing.T) {
+	for _, key := range []string{"GIT_USER_NAME", "GIT_USER_EMAIL", "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL"} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	t.Setenv("ENABLE_GIT_PUSH", "false")
+	t.Setenv("AUTO_GIT_PUSH", "false")
+	for _, configured := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fallback", true: "repository_config"}[configured], func(t *testing.T) {
+			dir := t.TempDir()
+			ctx := context.Background()
+			if out, err := runGitCommand(ctx, dir, "init"); err != nil {
+				t.Fatalf("init: %v: %s", err, out)
+			}
+			want := "Prototype Admin <admin@prototype.local>"
+			if configured {
+				res := executeGitCustomCommand(dir, `git config user.name "laibin" && git config user.email "laibin6@gmail.com"`)
+				if !res.Success {
+					t.Fatal(res)
+				}
+				want = "laibin <laibin6@gmail.com>"
+			}
+			res := executeGitCustomCommand(dir, "git commit --allow-empty -m test")
+			if !res.Success {
+				t.Fatalf("commit: %s %s", res.Error, res.Output)
+			}
+			assertIdentity := func() {
+				t.Helper()
+				out, err := runGitCommand(ctx, dir, "log", "-1", "--format=%an <%ae>|%cn <%ce>")
+				if err != nil || out != want+"|"+want {
+					t.Fatalf("identity = %q, want %q: %v", out, want+"|"+want, err)
+				}
+			}
+			assertIdentity()
+			if err := os.WriteFile(filepath.Join(dir, "upload.txt"), []byte("upload"), 0644); err != nil {
+				t.Fatal(err)
+			}
+			if err := tryGitCommitAndPush(dir, "upload.txt", "test", "v1"); err != nil {
+				t.Fatal(err)
+			}
+			assertIdentity()
+		})
+	}
+}
 
 func createTestGitRepo(t *testing.T) string {
 	t.Helper()
@@ -138,5 +185,28 @@ func TestExecuteGitPushAutoCommit(t *testing.T) {
 	}
 	if status.LatestCommit.Subject != "feat: add new feature" {
 		t.Errorf("预期最新提交为 'feat: add new feature'，实际: %s", status.LatestCommit.Subject)
+	}
+}
+
+func TestExecuteGitCustomCommand(t *testing.T) {
+	repoDir := createTestGitRepo(t)
+	defer os.RemoveAll(repoDir)
+
+	// 测试执行简单 git 命令
+	res := executeGitCustomCommand(repoDir, "git status")
+	if !res.Success {
+		t.Fatalf("自定义命令执行失败: %s", res.Error)
+	}
+
+	// 测试空命令
+	resEmpty := executeGitCustomCommand(repoDir, "")
+	if resEmpty.Success {
+		t.Errorf("空命令预期失败，实际成功")
+	}
+
+	// 测试命令输出
+	resBranch := executeGitCustomCommand(repoDir, "git branch --show-current")
+	if !resBranch.Success {
+		t.Errorf("git branch 执行失败: %s", resBranch.Error)
 	}
 }

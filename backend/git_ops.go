@@ -63,6 +63,10 @@ type GitPushRequest struct {
 	Force         bool   `json:"force"`
 }
 
+type GitExecRequest struct {
+	Command string `json:"command"`
+}
+
 var (
 	gitMu       sync.Mutex
 	gitLogsMu   sync.RWMutex
@@ -93,9 +97,36 @@ func clearGitLogs() {
 	gitLogsList = make([]*GitOpResponse, 0)
 }
 
+func getGitEnv(ctx context.Context, dir string) []string {
+	env := os.Environ()
+	resolve := func(key, variable, fallback string) string {
+		cmd := exec.CommandContext(ctx, "git", "-C", dir, "config", "--get", key)
+		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
+			return strings.TrimSpace(string(out))
+		}
+		if value := os.Getenv(variable); value != "" {
+			return value
+		}
+		return fallback
+	}
+	name := resolve("user.name", "GIT_USER_NAME", "Prototype Admin")
+	email := resolve("user.email", "GIT_USER_EMAIL", "admin@prototype.local")
+	// Preserve explicitly supplied author/committer overrides. Repository config
+	// takes precedence over application defaults, so page configuration works.
+	for key, value := range map[string]string{
+		"GIT_AUTHOR_NAME": name, "GIT_COMMITTER_NAME": name,
+		"GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_EMAIL": email,
+	} {
+		if os.Getenv(key) == "" {
+			env = append(env, key+"="+value)
+		}
+	}
+	return append(env, "GIT_TERMINAL_PROMPT=0")
+}
+
 func runGitCommand(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", append([]string{"-C", dir}, args...)...)
-	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	cmd.Env = getGitEnv(ctx, dir)
 	out, err := cmd.CombinedOutput()
 	return strings.TrimSpace(string(out)), err
 }
@@ -455,6 +486,71 @@ func executeGitPush(sourceDir string, req GitPushRequest) *GitOpResponse {
 	}
 	if execErr != nil {
 		res.Error = execErr.Error()
+	}
+
+	addGitLog(res)
+	return res
+}
+
+// executeGitCustomCommand 执行自定义 Git 命令
+func executeGitCustomCommand(sourceDir string, rawCmd string) *GitOpResponse {
+	gitMu.Lock()
+	defer gitMu.Unlock()
+
+	start := time.Now()
+	timestamp := start.Format("2006-01-02 15:04:05")
+
+	trimmedCmd := strings.TrimSpace(rawCmd)
+	if trimmedCmd == "" {
+		return &GitOpResponse{
+			Success:    false,
+			Action:     "exec",
+			Command:    "",
+			Output:     "执行失败：命令不能为空",
+			Error:      "命令不能为空",
+			DurationMs: 0,
+			Timestamp:  timestamp,
+		}
+	}
+
+	if sourceDir == "" {
+		return &GitOpResponse{
+			Success:    false,
+			Action:     "exec",
+			Command:    trimmedCmd,
+			Output:     "执行失败：未配置原型源目录 (PROTOTYPE_SOURCE_DIR)",
+			Error:      "未配置原型源目录",
+			DurationMs: 0,
+			Timestamp:  timestamp,
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	// 使用 sh -c 执行命令，便于支持管道、参数组合以及各种 git 指令
+	cmd := exec.CommandContext(ctx, "sh", "-c", trimmedCmd)
+	cmd.Dir = sourceDir
+	cmd.Env = getGitEnv(ctx, sourceDir)
+
+	outBytes, err := cmd.CombinedOutput()
+	output := strings.TrimSpace(string(outBytes))
+
+	res := &GitOpResponse{
+		Success:    err == nil,
+		Action:     "exec",
+		Command:    trimmedCmd,
+		Output:     output,
+		DurationMs: time.Since(start).Milliseconds(),
+		Timestamp:  timestamp,
+	}
+	if err != nil {
+		res.Error = err.Error()
+		if output == "" {
+			res.Output = err.Error()
+		}
+	} else if output == "" {
+		res.Output = "（命令执行成功，无任何终端输出）"
 	}
 
 	addGitLog(res)
