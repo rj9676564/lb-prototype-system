@@ -6,7 +6,7 @@ import {
   DeleteButton,
   DateField,
 } from "@refinedev/antd";
-import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex, Modal, Divider, Typography } from "antd";
+import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex, Modal, Divider, Typography, Tag } from "antd";
 import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined, PlusOutlined, HistoryOutlined } from "@ant-design/icons";
 import { useGetIdentity } from "@refinedev/core";
 import { useNavigate } from "react-router";
@@ -149,6 +149,10 @@ export const ProjectList = () => {
     }
   };
 
+  const launchProject = (record: any) => {
+    window.open(record.url, "_blank", "noopener,noreferrer");
+  };
+
   const openPreview = (url: string, title: string, updated?: string) => {
     const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
     const separator = fullUrl.includes("?") ? "&" : "?";
@@ -205,11 +209,27 @@ export const ProjectList = () => {
                 lineHeight: 1.5,
                 display: "inline-block",
               }}
-              onClick={() => navigate(`/rp_project/show/${record.id}`)}
+              onClick={() => (record.source_type === "url" && record.url ? launchProject(record) : navigate(`/rp_project/show/${record.id}`))}
             >
               {value}
             </Typography.Link>
           )}
+        />
+        <Table.Column
+          dataIndex="source_type"
+          title="类型"
+          width={100}
+          render={(value) =>
+            value === "url" ? (
+              <Tag color="purple">URL</Tag>
+            ) : value === "markdown" ? (
+              <Tag color="green">Markdown</Tag>
+            ) : value === "auto" ? (
+              <Tag color="blue">Git 同步</Tag>
+            ) : (
+              <Tag>本地上传</Tag>
+            )
+          }
         />
         <Table.Column
           dataIndex="description"
@@ -255,6 +275,17 @@ export const ProjectList = () => {
               <Flex vertical gap={2} style={{ whiteSpace: "nowrap" }}>
                 {/* 第一行：查看与预览 */}
                 <Space split={<Divider type="vertical" />} size={0}>
+                  {record.source_type === "url" && record.url && (
+                    <Button
+                      type="link"
+                      size="middle"
+                      icon={<ExportOutlined />}
+                      style={{ padding: "0 6px" }}
+                      onClick={() => launchProject(record)}
+                    >
+                      启动
+                    </Button>
+                  )}
                   {latestPrototype?.url && (
                     <Tooltip title="快速抽屉预览最新原型">
                       <Button

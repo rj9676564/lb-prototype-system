@@ -1,6 +1,6 @@
 import React from "react";
 import { Create, useForm } from "@refinedev/antd";
-import { Form, Input, Upload, Button } from "antd";
+import { Form, Input, Upload, Button, Radio } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
 
 export const ProjectCreate = () => {
@@ -39,6 +39,41 @@ export const ProjectCreate = () => {
           rules={[{ required: true, message: "请输入项目名称！" }]}
         >
           <Input />
+        </Form.Item>
+        <Form.Item label="项目类型" name="source_type" initialValue="manual">
+          <Radio.Group>
+            <Radio.Button value="manual">本地上传</Radio.Button>
+            <Radio.Button value="url">来自 URL</Radio.Button>
+            <Radio.Button value="markdown">来自 Markdown</Radio.Button>
+          </Radio.Group>
+        </Form.Item>
+        <Form.Item noStyle shouldUpdate={(p, c) => p.source_type !== c.source_type}>
+          {({ getFieldValue }) =>
+            getFieldValue("source_type") === "url" ? (
+              <Form.Item
+                label="项目链接"
+                name="url"
+                rules={[
+                  { required: true, message: "请输入项目链接！" },
+                  { type: "url", message: "请输入有效的 URL（以 http:// 或 https:// 开头）" },
+                ]}
+              >
+                <Input placeholder="https://example.com/prototype" />
+              </Form.Item>
+            ) : getFieldValue("source_type") === "markdown" ? (
+              <Form.Item
+                label="Markdown 内容"
+                name="markdown"
+                rules={[{ required: true, message: "请输入 Markdown 内容！" }]}
+              >
+                <Input.TextArea
+                  rows={16}
+                  placeholder="# 标题&#10;&#10;支持 GFM 语法：表格、任务列表、代码块等"
+                  style={{ fontFamily: "monospace" }}
+                />
+              </Form.Item>
+            ) : null
+          }
         </Form.Item>
         <Form.Item
           label="项目描述"

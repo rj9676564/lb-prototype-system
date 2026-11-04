@@ -1,3 +1,8 @@
+import "./markdown.css";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
+import rehypeRaw from "rehype-raw";
+import rehypeSanitize from "rehype-sanitize";
 import React, { useState, useEffect, useMemo } from "react";
 import { useShow, useGetIdentity } from "@refinedev/core";
 import { Show, DateField, EditButton } from "@refinedev/antd";
@@ -113,6 +118,8 @@ export const ProjectShow = () => {
   const [drawerTitle, setDrawerTitle] = useState<string>("");
 
   const isCreator = user?.id === record?.creator;
+  const isMarkdown = record?.source_type === "markdown";
+  const [mdPreviewSrc, setMdPreviewSrc] = useState<string | null>(null);
 
   useEffect(() => {
     if (!record?.id) return;
@@ -380,12 +387,23 @@ export const ProjectShow = () => {
               预览最新版本
             </Button>
           )}
-          <Button
-            icon={<PlusOutlined />}
-            onClick={() => navigate(`/rp_prototype/create?project=${record?.id}`)}
-          >
-            新建/上传版本
-          </Button>
+          {record?.source_type === "url" && record?.url && (
+            <Button
+              type="primary"
+              icon={<GlobalOutlined />}
+              onClick={() => window.open(record.url, "_blank", "noopener,noreferrer")}
+            >
+              启动
+            </Button>
+          )}
+          {record?.source_type !== "markdown" && (
+            <Button
+              icon={<PlusOutlined />}
+              onClick={() => navigate(`/rp_prototype/create?project=${record?.id}`)}
+            >
+              新建/上传版本
+            </Button>
+          )}
           {isCreator && <EditButton recordItemId={record?.id} />}
         </Space>
       )}
@@ -434,6 +452,7 @@ export const ProjectShow = () => {
         </div>
 
         {/* 统计指标 */}
+        {!isMarkdown && (<>
         <Divider style={{ margin: "16px 0 12px" }} />
         <Row gutter={[16, 16]}>
           <Col xs={12} sm={6}>
@@ -468,9 +487,46 @@ export const ProjectShow = () => {
             />
           </Col>
         </Row>
+        </>)}
       </Card>
 
+      {isMarkdown && (
+        <Card style={{ marginBottom: 24 }}>
+          <div className="markdown-body">
+            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}
+              components={{
+                img: ({ node, ...props }) => (
+                  <img
+                    {...props}
+                    style={{ cursor: "zoom-in" }}
+                    title="点击预览大图"
+                    onClick={() => typeof props.src === "string" && setMdPreviewSrc(props.src)}
+                  />
+                ),
+                table: ({ node, ...props }) => (
+                  <div className="md-table-wrap">
+                    <table {...props} />
+                  </div>
+                ),
+              }}
+            >{record?.markdown || ""}</ReactMarkdown>
+          </div>
+          <Image
+            style={{ display: "none" }}
+            src={mdPreviewSrc || undefined}
+            preview={{
+              visible: !!mdPreviewSrc,
+              src: mdPreviewSrc || undefined,
+              onVisibleChange: (v) => {
+                if (!v) setMdPreviewSrc(null);
+              },
+            }}
+          />
+        </Card>
+      )}
+
       {/* 选项卡：全部变更时间线 / 单版本对比 / 版本历史列表 */}
+      {!isMarkdown && (
       <Tabs
         activeKey={activeTab}
         onChange={(k) => setActiveTab(k)}
@@ -811,6 +867,7 @@ export const ProjectShow = () => {
           },
         ]}
       />
+      )}
 
       {/* 原型预览抽屉 */}
       <Drawer
