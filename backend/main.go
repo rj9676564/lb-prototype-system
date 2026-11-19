@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -148,6 +149,37 @@ func main() {
 				return nil
 			})
 		}
+
+		se.Router.PATCH("/api/projects/{id}/status", func(e *core.RequestEvent) error {
+			var body struct {
+				Status string `json:"status"`
+			}
+			if err := e.BindBody(&body); err != nil {
+				return e.BadRequestError("请求参数解析失败", err)
+			}
+			if body.Status != "已上线" && body.Status != "未上线" {
+				return e.BadRequestError("无效的项目状态", nil)
+			}
+
+			err := e.App.RunInTransaction(func(txApp core.App) error {
+				project, err := txApp.FindRecordById("rp_project", e.Request.PathValue("id"))
+				if err != nil {
+					return err
+				}
+				if project.GetString("status") == body.Status {
+					return nil
+				}
+				project.Set("status", body.Status)
+				return txApp.Save(project)
+			})
+			if errors.Is(err, sql.ErrNoRows) {
+				return e.NotFoundError("项目不存在", err)
+			}
+			if err != nil {
+				return e.InternalServerError("更新项目状态失败", err)
+			}
+			return e.JSON(http.StatusOK, body)
+		}).Bind(apis.RequireAuth())
 
 		se.Router.POST("/api/prototype-sync/scan", func(e *core.RequestEvent) error {
 			if e.Auth == nil {
@@ -411,6 +443,9 @@ func main() {
 	}
 
 	app.OnRecordCreate("rp_project").BindFunc(func(e *core.RecordEvent) error {
+		if e.Record.GetString("status") == "" {
+			e.Record.Set("status", "未上线")
+		}
 		if e.Record.GetDateTime("folder_time").IsZero() {
 			e.Record.Set("folder_time", types.NowDateTime())
 		}

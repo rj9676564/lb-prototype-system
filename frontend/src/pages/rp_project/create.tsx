@@ -1,7 +1,8 @@
 import React from "react";
 import { Create, useForm } from "@refinedev/antd";
-import { Form, Input, Upload, Button, Radio } from "antd";
+import { Form, Input, Upload, Button, Radio, Select } from "antd";
 import { UploadOutlined } from "@ant-design/icons";
+import { DEFAULT_PROJECT_STATUS, projectStatusOptions } from "./status";
 
 export const ProjectCreate = () => {
   const { formProps, saveButtonProps } = useForm<any>();
@@ -39,6 +40,9 @@ export const ProjectCreate = () => {
           rules={[{ required: true, message: "请输入项目名称！" }]}
         >
           <Input />
+        </Form.Item>
+        <Form.Item label="项目状态" name="status" initialValue={DEFAULT_PROJECT_STATUS} rules={[{ required: true }]}>
+          <Select options={projectStatusOptions} />
         </Form.Item>
         <Form.Item label="项目类型" name="source_type" initialValue="manual">
           <Radio.Group>

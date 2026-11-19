@@ -6,12 +6,13 @@ import {
   DeleteButton,
   DateField,
 } from "@refinedev/antd";
-import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex, Modal, Divider, Typography, Tag } from "antd";
+import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex, Modal, Divider, Typography, Tag, Select } from "antd";
 import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined, PlusOutlined, HistoryOutlined } from "@ant-design/icons";
 import { useGetIdentity } from "@refinedev/core";
-import { useNavigate } from "react-router";
+import { useNavigate, useSearchParams } from "react-router";
 import { pb } from "../../lib/pocketbase";
 import { API_URL, BASE_URL } from "../../providers/constants";
+import { DEFAULT_PROJECT_STATUS, projectStatusOptions, ProjectStatusTag } from "./status";
 
 type LatestPrototypeMeta = {
   title?: string;
@@ -22,14 +23,22 @@ type LatestPrototypeMeta = {
 export const ProjectList = () => {
   const { data: user } = useGetIdentity<any>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const urlStatus = searchParams.get("status");
+  const status = urlStatus && (urlStatus === "all" || projectStatusOptions.some((option) => option.value === urlStatus))
+    ? urlStatus
+    : DEFAULT_PROJECT_STATUS;
   const [messageApi, contextHolder] = message.useMessage();
   const [syncing, setSyncing] = React.useState(false);
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
   const [drawerTitle, setDrawerTitle] = React.useState<string>("");
   const [latestPrototypeMap, setLatestPrototypeMap] = React.useState<Record<string, LatestPrototypeMeta>>({});
 
-  const { tableProps, searchFormProps, tableQuery } = useTable({
+  const { tableProps, searchFormProps, tableQuery, setFilters, setCurrentPage } = useTable({
     syncWithLocation: false,
+    filters: {
+      initial: [{ field: "status", operator: "eq", value: status === "all" ? "" : status }],
+    },
     pagination: {
       pageSize: 50,
     },
@@ -51,6 +60,11 @@ export const ProjectList = () => {
       ];
     },
   });
+
+  React.useEffect(() => {
+    setFilters([{ field: "status", operator: "eq", value: status === "all" ? "" : status }], "merge");
+    setCurrentPage(1);
+  }, [status, setFilters, setCurrentPage]);
 
   const projectIdsKey = (tableProps?.dataSource?.map((item: any) => item?.id).filter(Boolean) ?? []).join(",");
 
@@ -165,9 +179,26 @@ export const ProjectList = () => {
   return (
     <List headerButtons={user ? undefined : false}>
       {contextHolder}
-      <Form {...searchFormProps} layout="inline" style={{ marginBottom: "1rem" }}>
+      <Form
+        {...searchFormProps}
+        layout="inline"
+        style={{ marginBottom: "1rem" }}
+      >
         <Form.Item name="keyword">
           <Input placeholder="检索项目名称/项目描述/创建人邮箱" prefix={<SearchOutlined />} style={{ width: 300 }} />
+        </Form.Item>
+        <Form.Item label="项目状态">
+          <Select
+            aria-label="项目状态"
+            value={status}
+            options={[{ label: "全部状态", value: "all" }, ...projectStatusOptions]}
+            onChange={(value) => {
+              const params = new URLSearchParams(searchParams);
+              params.set("status", value);
+              setSearchParams(params);
+            }}
+            style={{ width: 110 }}
+          />
         </Form.Item>
         <Flex gap="small">
           <Button type="primary" htmlType="submit">
@@ -230,6 +261,12 @@ export const ProjectList = () => {
               <Tag>本地上传</Tag>
             )
           }
+        />
+        <Table.Column
+          dataIndex="status"
+          title="项目状态"
+          width={100}
+          render={(value) => <ProjectStatusTag status={value} />}
         />
         <Table.Column
           dataIndex="description"

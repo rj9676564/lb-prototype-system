@@ -3,10 +3,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import rehypeSanitize from "rehype-sanitize";
+import { projectStatusOptions, ProjectStatusTag } from "./status";
 import React, { useState, useEffect, useMemo } from "react";
-import { useShow, useGetIdentity } from "@refinedev/core";
+import { useShow, useGetIdentity, useInvalidate } from "@refinedev/core";
 import { Show, DateField, EditButton } from "@refinedev/antd";
 import {
+  App,
   Typography,
   Image,
   Descriptions,
@@ -107,6 +109,9 @@ export const ProjectShow = () => {
   const record = data?.data;
   const { data: user } = useGetIdentity<any>();
   const navigate = useNavigate();
+  const invalidate = useInvalidate();
+  const { message } = App.useApp();
+  const [updatingStatus, setUpdatingStatus] = useState(false);
 
   const [activeTab, setActiveTab] = useState<string>("all-diffs");
   const [versions, setVersions] = useState<any[]>([]);
@@ -120,6 +125,25 @@ export const ProjectShow = () => {
   const isCreator = user?.id === record?.creator;
   const isMarkdown = record?.source_type === "markdown";
   const [mdPreviewSrc, setMdPreviewSrc] = useState<string | null>(null);
+
+  const updateProjectStatus = async (status: string) => {
+    const id = record?.id;
+    if (!id || updatingStatus || status === record.status) return;
+
+    setUpdatingStatus(true);
+    try {
+      await pb.send(`/api/projects/${encodeURIComponent(id)}/status`, {
+        method: "PATCH",
+        body: { status },
+      });
+      await invalidate({ resource: "rp_project", id, invalidates: ["detail", "list"] });
+      message.success("项目状态已更新");
+    } catch {
+      message.error("项目状态更新失败，请重试");
+    } finally {
+      setUpdatingStatus(false);
+    }
+  };
 
   useEffect(() => {
     if (!record?.id) return;
@@ -427,6 +451,22 @@ export const ProjectShow = () => {
               {record?.name}
             </Title>
             <Descriptions column={{ xs: 1, sm: 2, md: 3 }} size="small">
+              <Descriptions.Item label="项目状态">
+                {user && record ? (
+                  <Select
+                    aria-label="项目状态"
+                    size="small"
+                    value={record.status || "已上线"}
+                    options={projectStatusOptions}
+                    loading={updatingStatus}
+                    disabled={updatingStatus}
+                    onChange={updateProjectStatus}
+                    style={{ width: 100 }}
+                  />
+                ) : (
+                  <ProjectStatusTag status={record?.status} />
+                )}
+              </Descriptions.Item>
               <Descriptions.Item label="创建人">
                 {record?.expand?.creator?.email ||
                   record?.expand?.creator?.name ||
