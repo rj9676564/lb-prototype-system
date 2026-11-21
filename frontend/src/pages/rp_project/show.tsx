@@ -1,8 +1,5 @@
-import "./markdown.css";
-import ReactMarkdown from "react-markdown";
-import remarkGfm from "remark-gfm";
-import rehypeRaw from "rehype-raw";
-import rehypeSanitize from "rehype-sanitize";
+import { MarkdownView } from "../../components/MarkdownView";
+import { ProjectDocsTab } from "../../components/ProjectDocsTab";
 import { projectStatusOptions, ProjectStatusTag } from "./status";
 import React, { useState, useEffect, useMemo } from "react";
 import { useShow, useGetIdentity, useInvalidate } from "@refinedev/core";
@@ -22,7 +19,6 @@ import {
   Badge,
   List,
   Empty,
-  Drawer,
   Select,
   Divider,
   Timeline,
@@ -50,6 +46,7 @@ import {
   ClockCircleOutlined,
   SwapOutlined,
   AppstoreOutlined,
+  FileMarkdownOutlined,
 } from "@ant-design/icons";
 import { useNavigate } from "react-router";
 import { pb } from "../../lib/pocketbase";
@@ -119,12 +116,10 @@ export const ProjectShow = () => {
   const [selectedVersionId, setSelectedVersionId] = useState<string>("");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
   const [filterDiffType, setFilterDiffType] = useState<string>("all");
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [drawerTitle, setDrawerTitle] = useState<string>("");
+  const [docCount, setDocCount] = useState<number>(0);
 
   const isCreator = user?.id === record?.creator;
   const isMarkdown = record?.source_type === "markdown";
-  const [mdPreviewSrc, setMdPreviewSrc] = useState<string | null>(null);
 
   const updateProjectStatus = async (status: string) => {
     const id = record?.id;
@@ -184,10 +179,9 @@ export const ProjectShow = () => {
   const latestVersion = versions[0];
   const selectedVersion = versions.find((v) => v.id === selectedVersionId) || latestVersion;
 
-  const openPreview = (url: string, title: string) => {
+  const openPreview = (url: string, _title: string) => {
     const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
-    setPreviewUrl(fullUrl);
-    setDrawerTitle(title);
+    window.open(fullUrl, "_blank", "noopener,noreferrer");
   };
 
   const statusMap: Record<string, { label: string; color: string }> = {
@@ -428,6 +422,23 @@ export const ProjectShow = () => {
               新建/上传版本
             </Button>
           )}
+          <Button
+            icon={<FileMarkdownOutlined />}
+            onClick={() => {
+              if (!isMarkdown) {
+                setActiveTab("docs");
+              }
+              document.getElementById("project-docs-section")?.scrollIntoView({ behavior: "smooth" });
+            }}
+          >
+            联调文档 ({docCount})
+          </Button>
+          <Button
+            icon={<HistoryOutlined />}
+            onClick={() => navigate(`/rp_prototype?filters[0][field]=project&filters[0][operator]=eq&filters[0][value]=${record?.id}`)}
+          >
+            版本
+          </Button>
           {isCreator && <EditButton recordItemId={record?.id} />}
         </Space>
       )}
@@ -531,42 +542,26 @@ export const ProjectShow = () => {
       </Card>
 
       {isMarkdown && (
-        <Card style={{ marginBottom: 24 }}>
-          <div className="markdown-body">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}
-              components={{
-                img: ({ node, ...props }) => (
-                  <img
-                    {...props}
-                    style={{ cursor: "zoom-in" }}
-                    title="点击预览大图"
-                    onClick={() => typeof props.src === "string" && setMdPreviewSrc(props.src)}
-                  />
-                ),
-                table: ({ node, ...props }) => (
-                  <div className="md-table-wrap">
-                    <table {...props} />
-                  </div>
-                ),
-              }}
-            >{record?.markdown || ""}</ReactMarkdown>
-          </div>
-          <Image
-            style={{ display: "none" }}
-            src={mdPreviewSrc || undefined}
-            preview={{
-              visible: !!mdPreviewSrc,
-              src: mdPreviewSrc || undefined,
-              onVisibleChange: (v) => {
-                if (!v) setMdPreviewSrc(null);
-              },
-            }}
-          />
-        </Card>
+        <>
+          <Card style={{ marginBottom: 24 }}>
+            <MarkdownView content={record?.markdown} />
+          </Card>
+          {record?.id && (
+            <div id="project-docs-section">
+              <ProjectDocsTab
+                projectId={record.id}
+                projectName={record.name}
+                currentUserId={user?.id}
+                onCountChange={setDocCount}
+              />
+            </div>
+          )}
+        </>
       )}
 
       {/* 选项卡：全部变更时间线 / 单版本对比 / 版本历史列表 */}
       {!isMarkdown && (
+      <div id="project-docs-section">
       <Tabs
         activeKey={activeTab}
         onChange={(k) => setActiveTab(k)}
@@ -905,35 +900,26 @@ export const ProjectShow = () => {
               </Table>
             ),
           },
+          {
+            key: "docs",
+            label: (
+              <span>
+                <FileMarkdownOutlined /> 联调文档 / 备注 ({docCount})
+              </span>
+            ),
+            children: record?.id ? (
+              <ProjectDocsTab
+                projectId={record.id}
+                projectName={record.name}
+                currentUserId={user?.id}
+                onCountChange={setDocCount}
+              />
+            ) : null,
+          },
         ]}
       />
+      </div>
       )}
-
-      {/* 原型预览抽屉 */}
-      <Drawer
-        title={drawerTitle}
-        placement="right"
-        width="85%"
-        onClose={() => setPreviewUrl(null)}
-        open={!!previewUrl}
-        extra={
-          <Button
-            icon={<ExportOutlined />}
-            onClick={() => previewUrl && window.open(previewUrl, "_blank")}
-          >
-            新窗口打开
-          </Button>
-        }
-        styles={{ body: { padding: 0, overflow: "hidden" } }}
-      >
-        {previewUrl && (
-          <iframe
-            src={previewUrl}
-            title="Prototype Preview"
-            style={{ width: "100%", height: "100%", border: "none" }}
-          />
-        )}
-      </Drawer>
     </Show>
   );
 };

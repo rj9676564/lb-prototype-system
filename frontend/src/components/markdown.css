@@ -37,12 +37,11 @@
 }
 .markdown-body pre code { padding: 0; background: transparent; font-size: 0.9em; }
 .markdown-body .md-table-wrap { overflow-x: auto; margin: 0 0 1em; }
-.markdown-body .md-table-wrap table { margin: 0; border-collapse: collapse; width: 100%; table-layout: fixed; }
-.markdown-body td, .markdown-body th { vertical-align: top; word-break: break-word; overflow-wrap: anywhere; }
+.markdown-body .md-table-wrap table { margin: 0; border-collapse: collapse; width: max-content; min-width: 100%; }
+.markdown-body td, .markdown-body th { vertical-align: top; word-break: break-word; overflow-wrap: break-word; min-width: 72px; max-width: 420px; }
 .markdown-body td img { display: block; max-width: 100%; height: auto; margin: 4px 0; }
 .markdown-body th, .markdown-body td { padding: 6px 13px; border: 1px solid rgba(128,128,128,0.35); }
-.markdown-body th { font-weight: 600; background: rgba(128,128,128,0.1); }
+.markdown-body th { font-weight: 600; background: rgba(128,128,128,0.1); white-space: nowrap; }
 .markdown-body tr:nth-child(even) td { background: rgba(128,128,128,0.05); }
 .markdown-body hr { border: 0; border-top: 1px solid rgba(128,128,128,0.3); margin: 1.5em 0; }
 .markdown-body img { max-width: 100%; border-radius: 4px; }
-.markdown-body .md-table-wrap th:first-child, .markdown-body .md-table-wrap td:first-child { width: 56px; }

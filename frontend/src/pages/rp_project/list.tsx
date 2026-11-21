@@ -2,14 +2,15 @@ import React from "react";
 import {
   List,
   useTable,
-  EditButton,
   DeleteButton,
   DateField,
 } from "@refinedev/antd";
 import { Table, Space, Avatar, Button, Form, Input, message, Tooltip, Drawer, Flex, Modal, Divider, Typography, Tag, Select } from "antd";
-import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined, PlusOutlined, HistoryOutlined } from "@ant-design/icons";
+import { EyeOutlined, SearchOutlined, SyncOutlined, GlobalOutlined, ExportOutlined, FileMarkdownOutlined } from "@ant-design/icons";
 import { useGetIdentity } from "@refinedev/core";
 import { useNavigate, useSearchParams } from "react-router";
+import { MarkdownView } from "../../components/MarkdownView";
+import { ProjectDocsTab } from "../../components/ProjectDocsTab";
 import { pb } from "../../lib/pocketbase";
 import { API_URL, BASE_URL } from "../../providers/constants";
 import { DEFAULT_PROJECT_STATUS, projectStatusOptions, ProjectStatusTag } from "./status";
@@ -30,9 +31,10 @@ export const ProjectList = () => {
     : DEFAULT_PROJECT_STATUS;
   const [messageApi, contextHolder] = message.useMessage();
   const [syncing, setSyncing] = React.useState(false);
-  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
-  const [drawerTitle, setDrawerTitle] = React.useState<string>("");
+  const [mdPreview, setMdPreview] = React.useState<{ title: string; content: string } | null>(null);
   const [latestPrototypeMap, setLatestPrototypeMap] = React.useState<Record<string, LatestPrototypeMeta>>({});
+  const [docCountMap, setDocCountMap] = React.useState<Record<string, number>>({});
+  const [docsDrawerProject, setDocsDrawerProject] = React.useState<{ id: string; name: string } | null>(null);
 
   const { tableProps, searchFormProps, tableQuery, setFilters, setCurrentPage } = useTable({
     syncWithLocation: false,
@@ -73,6 +75,7 @@ export const ProjectList = () => {
 
     if (projectIds.length === 0) {
       setLatestPrototypeMap({});
+      setDocCountMap({});
       return;
     }
 
@@ -81,15 +84,21 @@ export const ProjectList = () => {
     const loadLatestPrototypes = async () => {
       try {
         const filter = projectIds.map((id) => `project = "${id}"`).join(" || ");
-        const response = await pb.collection("rp_prototype").getList<any>(1, 200, {
-          filter,
-          sort: "-created",
-        });
+        const [protoRes, docsRes] = await Promise.all([
+          pb.collection("rp_prototype").getList<any>(1, 200, {
+            filter,
+            sort: "-created",
+          }),
+          pb.collection("rp_project_doc").getList<any>(1, 500, {
+            filter,
+            fields: "id,project",
+          }),
+        ]);
 
         if (cancelled) return;
 
         const map: Record<string, LatestPrototypeMeta> = {};
-        for (const item of response.items || []) {
+        for (const item of protoRes.items || []) {
           if (item.project && !map[item.project]) {
             map[item.project] = {
               title: item.title,
@@ -99,10 +108,19 @@ export const ProjectList = () => {
           }
         }
 
+        const counts: Record<string, number> = {};
+        for (const doc of docsRes.items || []) {
+          if (doc.project) {
+            counts[doc.project] = (counts[doc.project] || 0) + 1;
+          }
+        }
+
         setLatestPrototypeMap(map);
+        setDocCountMap(counts);
       } catch {
         if (!cancelled) {
           setLatestPrototypeMap({});
+          setDocCountMap({});
         }
       }
     };
@@ -167,13 +185,33 @@ export const ProjectList = () => {
     window.open(record.url, "_blank", "noopener,noreferrer");
   };
 
-  const openPreview = (url: string, title: string, updated?: string) => {
+  const openPreview = (url: string, _title: string, updated?: string) => {
     const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
     const separator = fullUrl.includes("?") ? "&" : "?";
     const version = updated ? encodeURIComponent(updated) : new Date().getTime().toString();
     const busterUrl = `${fullUrl}${separator}v=${version}`;
-    setPreviewUrl(busterUrl);
-    setDrawerTitle(title);
+    window.open(busterUrl, "_blank", "noopener,noreferrer");
+  };
+
+  const handleProjectNameClick = (record: any) => {
+    if (record.source_type === "markdown") {
+      setMdPreview({ title: record.name, content: record.markdown || "" });
+      return;
+    }
+    if (record.source_type === "url" && record.url) {
+      launchProject(record);
+      return;
+    }
+    const latestPrototype = latestPrototypeMap[record.id];
+    if (latestPrototype?.url) {
+      openPreview(
+        latestPrototype.url,
+        `${record.name} - ${latestPrototype.title || "最新版本"}`,
+        latestPrototype.updated,
+      );
+      return;
+    }
+    navigate(`/rp_project/show/${record.id}`);
   };
 
   return (
@@ -240,7 +278,7 @@ export const ProjectList = () => {
                 lineHeight: 1.5,
                 display: "inline-block",
               }}
-              onClick={() => (record.source_type === "url" && record.url ? launchProject(record) : navigate(`/rp_project/show/${record.id}`))}
+              onClick={() => handleProjectNameClick(record)}
             >
               {value}
             </Typography.Link>
@@ -278,19 +316,6 @@ export const ProjectList = () => {
           )}
         />
         <Table.Column
-          dataIndex="creator"
-          title="创建人"
-          width={180}
-          render={(value, record: any) => {
-            const creatorName = record?.expand?.creator?.email || record?.expand?.creator?.name || value || "-";
-            return (
-              <div style={{ whiteSpace: "normal", wordBreak: "break-word", lineHeight: 1.4 }}>
-                {creatorName}
-              </div>
-            );
-          }}
-        />
-        <Table.Column
           dataIndex="created"
           title="创建时间"
           width={175}
@@ -302,121 +327,132 @@ export const ProjectList = () => {
           )}
         />
         <Table.Column
+          dataIndex="updated"
+          title="更新时间"
+          width={175}
+          sorter
+          render={(value) => (
+            <div style={{ whiteSpace: "nowrap", minWidth: 160 }}>
+              <DateField format="YYYY-MM-DD HH:mm:ss" value={value} />
+            </div>
+          )}
+        />
+        <Table.Column
           title="操作"
           dataIndex="actions"
-          width={220}
+          width={200}
           render={(_, record: any) => {
             const isCreator = user?.id === record.creator;
             const latestPrototype = latestPrototypeMap[record.id];
             return (
-              <Flex vertical gap={2} style={{ whiteSpace: "nowrap" }}>
-                {/* 第一行：查看与预览 */}
-                <Space split={<Divider type="vertical" />} size={0}>
-                  {record.source_type === "url" && record.url && (
+              <Space split={<Divider type="vertical" />} size={0} style={{ whiteSpace: "nowrap" }}>
+                {record.source_type === "markdown" && (
+                  <Tooltip title="快速抽屉预览 Markdown 内容">
                     <Button
                       type="link"
                       size="middle"
-                      icon={<ExportOutlined />}
+                      icon={<GlobalOutlined />}
                       style={{ padding: "0 6px" }}
-                      onClick={() => launchProject(record)}
+                      onClick={() => setMdPreview({ title: record.name, content: record.markdown || "" })}
                     >
-                      启动
+                      预览
                     </Button>
-                  )}
-                  {latestPrototype?.url && (
-                    <Tooltip title="快速抽屉预览最新原型">
-                      <Button
-                        type="link"
-                        size="middle"
-                        icon={<GlobalOutlined />}
-                        style={{ padding: "0 6px" }}
-                        onClick={() => {
-                          openPreview(
-                            latestPrototype.url!,
-                            `${record.name} - ${latestPrototype.title || "最新版本"}`,
-                            latestPrototype.updated,
-                          );
-                        }}
-                      >
-                        预览
-                      </Button>
-                    </Tooltip>
-                  )}
+                  </Tooltip>
+                )}
+                {record.source_type === "url" && record.url && (
                   <Button
                     type="link"
                     size="middle"
-                    icon={<EyeOutlined />}
+                    icon={<ExportOutlined />}
                     style={{ padding: "0 6px" }}
-                    onClick={() => navigate(`/rp_project/show/${record.id}`)}
+                    onClick={() => launchProject(record)}
                   >
-                    详情
+                    启动
                   </Button>
+                )}
+                {latestPrototype?.url && (
+                  <Tooltip title="快速抽屉预览最新原型">
+                    <Button
+                      type="link"
+                      size="middle"
+                      icon={<GlobalOutlined />}
+                      style={{ padding: "0 6px" }}
+                      onClick={() => {
+                        openPreview(
+                          latestPrototype.url!,
+                          `${record.name} - ${latestPrototype.title || "最新版本"}`,
+                          latestPrototype.updated,
+                        );
+                      }}
+                    >
+                      预览
+                    </Button>
+                  </Tooltip>
+                )}
+                {docCountMap[record.id] > 0 && (
                   <Button
                     type="link"
                     size="middle"
-                    icon={<HistoryOutlined />}
+                    icon={<FileMarkdownOutlined />}
                     style={{ padding: "0 6px" }}
-                    onClick={() => navigate(`/rp_prototype?filters[0][field]=project&filters[0][operator]=eq&filters[0][value]=${record.id}`)}
+                    onClick={() => setDocsDrawerProject({ id: record.id, name: record.name })}
                   >
-                    版本
+                    {`文档(${docCountMap[record.id]})`}
                   </Button>
-                </Space>
-
-                {/* 第二行：管理与维护 */}
-                <Space split={<Divider type="vertical" />} size={0}>
-                  <Button
+                )}
+                <Button
+                  type="link"
+                  size="middle"
+                  icon={<EyeOutlined />}
+                  style={{ padding: "0 6px" }}
+                  onClick={() => navigate(`/rp_project/show/${record.id}`)}
+                >
+                  详情
+                </Button>
+                {isCreator && (
+                  <DeleteButton
                     type="link"
                     size="middle"
-                    icon={<PlusOutlined />}
+                    recordItemId={record.id}
                     style={{ padding: "0 6px" }}
-                    onClick={() => navigate(`/rp_prototype/create?project=${record.id}`)}
-                  >
-                    新建
-                  </Button>
-                  {isCreator && (
-                    <>
-                      <EditButton
-                        type="link"
-                        size="middle"
-                        recordItemId={record.id}
-                        style={{ padding: "0 6px" }}
-                      />
-                      <DeleteButton
-                        type="link"
-                        size="middle"
-                        recordItemId={record.id}
-                        style={{ padding: "0 6px" }}
-                      />
-                    </>
-                  )}
-                </Space>
-              </Flex>
+                  />
+                )}
+              </Space>
             );
           }}
         />
       </Table>
 
       <Drawer
-        title={drawerTitle}
+        title={mdPreview?.title}
+        placement="right"
+        width="70%"
+        onClose={() => setMdPreview(null)}
+        open={!!mdPreview}
+        destroyOnClose
+      >
+        {mdPreview && <MarkdownView content={mdPreview.content} />}
+      </Drawer>
+
+      <Drawer
+        title={docsDrawerProject ? `${docsDrawerProject.name} - 联调文档与备注` : "联调文档与备注"}
         placement="right"
         width="80%"
-        onClose={() => setPreviewUrl(null)}
-        open={!!previewUrl}
-        extra={
-          <Button
-            icon={<ExportOutlined />}
-            onClick={() => previewUrl && window.open(previewUrl, "_blank")}
-          >
-            新窗口打开
-          </Button>
-        }
-        styles={{ body: { padding: 0, overflow: "hidden" } }}
+        onClose={() => setDocsDrawerProject(null)}
+        open={!!docsDrawerProject}
+        destroyOnClose
       >
-        {previewUrl && (
-          <iframe
-            src={previewUrl}
-            title="Latest Prototype Preview"
-            style={{ width: "100%", height: "100%", border: "none" }}
+        {docsDrawerProject && (
+          <ProjectDocsTab
+            projectId={docsDrawerProject.id}
+            projectName={docsDrawerProject.name}
+            currentUserId={user?.id}
+            onCountChange={(count) =>
+              setDocCountMap((prev) => ({
+                ...prev,
+                [docsDrawerProject.id]: count,
+              }))
+            }
           />
         )}
       </Drawer>

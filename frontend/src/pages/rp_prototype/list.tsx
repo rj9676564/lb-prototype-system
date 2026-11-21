@@ -9,8 +9,8 @@ import {
   useSelect,
   CreateButton,
 } from "@refinedev/antd";
-import { Table, Space, Tag, Button, Tooltip, Form, Select, Drawer, Flex, Divider, Typography } from "antd";
-import { GlobalOutlined, SearchOutlined, ExportOutlined, EyeOutlined, ProjectOutlined } from "@ant-design/icons";
+import { Table, Space, Tag, Button, Tooltip, Form, Select, Flex, Divider, Typography } from "antd";
+import { GlobalOutlined, SearchOutlined, EyeOutlined, ProjectOutlined } from "@ant-design/icons";
 import { useGetIdentity } from "@refinedev/core";
 import { useNavigate, useSearchParams } from "react-router";
 import { BASE_URL } from "../../providers/constants";
@@ -20,9 +20,12 @@ export const PrototypeList = () => {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
-  // 预览相关的状态
-  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
-  const [drawerTitle, setDrawerTitle] = React.useState<string>("");
+  const openPrototypePreview = (url: string, updated?: string) => {
+    const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
+    const separator = fullUrl.includes("?") ? "&" : "?";
+    const version = updated ? encodeURIComponent(updated) : new Date().getTime().toString();
+    window.open(`${fullUrl}${separator}v=${version}`, "_blank", "noopener,noreferrer");
+  };
 
   const { tableProps, filters, searchFormProps } = useTable({
     syncWithLocation: true,
@@ -111,14 +114,7 @@ export const PrototypeList = () => {
               }}
               onClick={() => {
                 if (record.url) {
-                  const fullUrl = record.url.startsWith('/') 
-                    ? `${BASE_URL}${record.url}` 
-                    : record.url;
-                  const separator = fullUrl.includes("?") ? "&" : "?";
-                  const version = record.updated ? encodeURIComponent(record.updated) : new Date().getTime().toString();
-                  const busterUrl = `${fullUrl}${separator}v=${version}`;
-                  setPreviewUrl(busterUrl);
-                  setDrawerTitle(record.title);
+                  openPrototypePreview(record.url, record.updated);
                 } else {
                   navigate(`/rp_prototype/show/${record.id}`);
                 }
@@ -216,22 +212,13 @@ export const PrototypeList = () => {
                 {/* 第一行：查看与预览 */}
                 <Space split={<Divider type="vertical" />} size={0}>
                   {record.url && (
-                    <Tooltip title="快速抽屉预览原型">
+                    <Tooltip title="在新标签页预览原型">
                       <Button
                         type="link"
                         size="middle"
                         icon={<GlobalOutlined />}
                         style={{ padding: "0 6px" }}
-                        onClick={() => {
-                          const fullUrl = record.url.startsWith('/') 
-                            ? `${BASE_URL}${record.url}` 
-                            : record.url;
-                          const separator = fullUrl.includes("?") ? "&" : "?";
-                          const version = record.updated ? encodeURIComponent(record.updated) : new Date().getTime().toString();
-                          const busterUrl = `${fullUrl}${separator}v=${version}`;
-                          setPreviewUrl(busterUrl);
-                          setDrawerTitle(record.title);
-                        }}
+                        onClick={() => openPrototypePreview(record.url, record.updated)}
                       >
                         预览
                       </Button>
@@ -283,32 +270,6 @@ export const PrototypeList = () => {
           }}
         />
       </Table>
-
-      {/* 侧边预览抽屉 */}
-      <Drawer
-        title={drawerTitle}
-        placement="right"
-        width="80%"
-        onClose={() => setPreviewUrl(null)}
-        open={!!previewUrl}
-        extra={
-          <Button 
-            icon={<ExportOutlined />} 
-            onClick={() => window.open(previewUrl!, "_blank")}
-          >
-            新窗口打开
-          </Button>
-        }
-        styles={{ body: { padding: 0, overflow: 'hidden' } }}
-      >
-        {previewUrl && (
-          <iframe
-            src={previewUrl}
-            title="Prototype Preview"
-            style={{ width: '100%', height: '100%', border: 'none' }}
-          />
-        )}
-      </Drawer>
     </List>
   );
 };
