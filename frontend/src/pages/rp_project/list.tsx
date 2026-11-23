@@ -31,7 +31,9 @@ export const ProjectList = () => {
     : DEFAULT_PROJECT_STATUS;
   const [messageApi, contextHolder] = message.useMessage();
   const [syncing, setSyncing] = React.useState(false);
+  const [previewUrl, setPreviewUrl] = React.useState<string | null>(null);
   const [mdPreview, setMdPreview] = React.useState<{ title: string; content: string } | null>(null);
+  const [drawerTitle, setDrawerTitle] = React.useState<string>("");
   const [latestPrototypeMap, setLatestPrototypeMap] = React.useState<Record<string, LatestPrototypeMeta>>({});
   const [docCountMap, setDocCountMap] = React.useState<Record<string, number>>({});
   const [docsDrawerProject, setDocsDrawerProject] = React.useState<{ id: string; name: string } | null>(null);
@@ -185,33 +187,20 @@ export const ProjectList = () => {
     window.open(record.url, "_blank", "noopener,noreferrer");
   };
 
-  const openPreview = (url: string, _title: string, updated?: string) => {
+  const buildPreviewUrl = (url: string, updated?: string) => {
     const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
     const separator = fullUrl.includes("?") ? "&" : "?";
     const version = updated ? encodeURIComponent(updated) : new Date().getTime().toString();
-    const busterUrl = `${fullUrl}${separator}v=${version}`;
-    window.open(busterUrl, "_blank", "noopener,noreferrer");
+    return `${fullUrl}${separator}v=${version}`;
+  };
+
+  const openPreview = (url: string, title: string, updated?: string) => {
+    setPreviewUrl(buildPreviewUrl(url, updated));
+    setDrawerTitle(title);
   };
 
   const handleProjectNameClick = (record: any) => {
-    if (record.source_type === "markdown") {
-      setMdPreview({ title: record.name, content: record.markdown || "" });
-      return;
-    }
-    if (record.source_type === "url" && record.url) {
-      launchProject(record);
-      return;
-    }
-    const latestPrototype = latestPrototypeMap[record.id];
-    if (latestPrototype?.url) {
-      openPreview(
-        latestPrototype.url,
-        `${record.name} - ${latestPrototype.title || "最新版本"}`,
-        latestPrototype.updated,
-      );
-      return;
-    }
-    navigate(`/rp_project/show/${record.id}`);
+    window.open(`${window.location.origin}/rp_project/preview/${record.id}`, "_blank", "noopener,noreferrer");
   };
 
   return (
@@ -389,17 +378,15 @@ export const ProjectList = () => {
                     </Button>
                   </Tooltip>
                 )}
-                {docCountMap[record.id] > 0 && (
-                  <Button
-                    type="link"
-                    size="middle"
-                    icon={<FileMarkdownOutlined />}
-                    style={{ padding: "0 6px" }}
-                    onClick={() => setDocsDrawerProject({ id: record.id, name: record.name })}
-                  >
-                    {`文档(${docCountMap[record.id]})`}
-                  </Button>
-                )}
+                <Button
+                  type="link"
+                  size="middle"
+                  icon={<FileMarkdownOutlined />}
+                  style={{ padding: "0 6px" }}
+                  onClick={() => setDocsDrawerProject({ id: record.id, name: record.name })}
+                >
+                  {docCountMap[record.id] > 0 ? `文档(${docCountMap[record.id]})` : "文档"}
+                </Button>
                 <Button
                   type="link"
                   size="middle"
@@ -432,6 +419,31 @@ export const ProjectList = () => {
         destroyOnClose
       >
         {mdPreview && <MarkdownView content={mdPreview.content} />}
+      </Drawer>
+
+      <Drawer
+        title={drawerTitle}
+        placement="right"
+        width="80%"
+        onClose={() => setPreviewUrl(null)}
+        open={!!previewUrl}
+        extra={
+          <Button
+            icon={<ExportOutlined />}
+            onClick={() => previewUrl && window.open(previewUrl, "_blank")}
+          >
+            新窗口打开
+          </Button>
+        }
+        styles={{ body: { padding: 0, overflow: "hidden" } }}
+      >
+        {previewUrl && (
+          <iframe
+            src={previewUrl}
+            title="Latest Prototype Preview"
+            style={{ width: "100%", height: "100%", border: "none" }}
+          />
+        )}
       </Drawer>
 
       <Drawer

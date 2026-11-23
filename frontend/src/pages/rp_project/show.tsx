@@ -19,6 +19,7 @@ import {
   Badge,
   List,
   Empty,
+  Drawer,
   Select,
   Divider,
   Timeline,
@@ -116,6 +117,8 @@ export const ProjectShow = () => {
   const [selectedVersionId, setSelectedVersionId] = useState<string>("");
   const [searchKeyword, setSearchKeyword] = useState<string>("");
   const [filterDiffType, setFilterDiffType] = useState<string>("all");
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [drawerTitle, setDrawerTitle] = useState<string>("");
   const [docCount, setDocCount] = useState<number>(0);
 
   const isCreator = user?.id === record?.creator;
@@ -179,9 +182,10 @@ export const ProjectShow = () => {
   const latestVersion = versions[0];
   const selectedVersion = versions.find((v) => v.id === selectedVersionId) || latestVersion;
 
-  const openPreview = (url: string, _title: string) => {
+  const openPreview = (url: string, title: string) => {
     const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
-    window.open(fullUrl, "_blank", "noopener,noreferrer");
+    setPreviewUrl(fullUrl);
+    setDrawerTitle(title);
   };
 
   const statusMap: Record<string, { label: string; color: string }> = {
@@ -920,6 +924,32 @@ export const ProjectShow = () => {
       />
       </div>
       )}
+
+      {/* 原型预览抽屉 */}
+      <Drawer
+        title={drawerTitle}
+        placement="right"
+        width="85%"
+        onClose={() => setPreviewUrl(null)}
+        open={!!previewUrl}
+        extra={
+          <Button
+            icon={<ExportOutlined />}
+            onClick={() => previewUrl && window.open(previewUrl, "_blank")}
+          >
+            新窗口打开
+          </Button>
+        }
+        styles={{ body: { padding: 0, overflow: "hidden" } }}
+      >
+        {previewUrl && (
+          <iframe
+            src={previewUrl}
+            title="Prototype Preview"
+            style={{ width: "100%", height: "100%", border: "none" }}
+          />
+        )}
+      </Drawer>
     </Show>
   );
 };

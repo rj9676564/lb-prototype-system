@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   App,
   Button,
@@ -117,6 +117,12 @@ export const ProjectDocsTab: React.FC<ProjectDocsTabProps> = ({
   const isAuthenticated = Boolean(currentUserId || pb.authStore.record?.id);
   const activeUserId = currentUserId || pb.authStore.record?.id || "";
 
+  const onCountChangeRef = useRef(onCountChange);
+  onCountChangeRef.current = onCountChange;
+
+  const messageRef = useRef(message);
+  messageRef.current = message;
+
   const loadDocs = useCallback(
     async (preferredId?: string | null) => {
       if (!projectId) return;
@@ -129,7 +135,7 @@ export const ProjectDocsTab: React.FC<ProjectDocsTabProps> = ({
         });
         const items = res.items || [];
         setDocs(items);
-        onCountChange?.(items.length);
+        onCountChangeRef.current?.(items.length);
 
         setSelectedDocId((prev) => {
           const targetId = preferredId !== undefined ? preferredId : prev;
@@ -139,12 +145,12 @@ export const ProjectDocsTab: React.FC<ProjectDocsTabProps> = ({
           return items[0]?.id || null;
         });
       } catch (err: any) {
-        message.error(`加载联调文档失败: ${err?.message || "未知错误"}`);
+        messageRef.current.error(`加载联调文档失败: ${err?.message || "未知错误"}`);
       } finally {
         setLoading(false);
       }
     },
-    [projectId, message, onCountChange],
+    [projectId],
   );
 
   useEffect(() => {
@@ -452,6 +458,7 @@ export const ProjectDocsTab: React.FC<ProjectDocsTabProps> = ({
       <Modal
         title={editingDoc ? `编辑文档：${editingDoc.title}` : "新增联调文档 / 备注"}
         open={modalOpen}
+        zIndex={1100}
         onCancel={() => setModalOpen(false)}
         onOk={handleSubmit}
         confirmLoading={saving}

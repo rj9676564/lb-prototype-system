@@ -3,7 +3,7 @@ import { DevtoolsPanel, DevtoolsProvider } from "@refinedev/devtools";
 import { RefineKbar, RefineKbarProvider } from "@refinedev/kbar";
 import { ThemedLayout, ThemedSider, AuthPage, ErrorComponent, ThemedTitle } from "@refinedev/antd";
 import { 
-  ProjectList, ProjectCreate, ProjectEdit, ProjectShow 
+  ProjectList, ProjectCreate, ProjectEdit, ProjectShow, ProjectPreview 
 } from "./pages/rp_project";
 import { 
   PrototypeList, PrototypeCreate, PrototypeEdit, PrototypeShow 
@@ -260,6 +260,7 @@ function App() {
                       </Route>
                       <Route path="*" element={<ErrorComponent />} />
                     </Route>
+                    <Route path="/rp_project/preview/:id" element={<ProjectPreview />} />
                     <Route
                       element={
                         <Authenticated key="authenticated-auth" fallback={<Outlet />}>
