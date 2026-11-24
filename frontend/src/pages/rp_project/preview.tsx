@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { useParams } from "react-router";
+import { useParams, useSearchParams } from "react-router";
 import {
   App,
   Badge,
@@ -44,6 +44,8 @@ const DOC_TYPE_META: Record<ProjectDocType, { label: string; color: string }> = 
  */
 export const ProjectPreview: React.FC = () => {
   const { id } = useParams<{ id: string }>();
+  const [searchParams] = useSearchParams();
+  const requestedVersionId = searchParams.get("version") || "";
   const { data: user } = useGetIdentity<any>();
   const { message } = App.useApp();
 
@@ -78,9 +80,13 @@ export const ProjectPreview: React.FC = () => {
       setProject(projRes);
       const protoItems = protoRes.items || [];
       setVersions(protoItems);
-      setSelectedVersionId((prev) =>
-        prev && protoItems.some((item) => item.id === prev) ? prev : protoItems[0]?.id || "",
-      );
+      setSelectedVersionId((prev) => {
+        if (prev && protoItems.some((item) => item.id === prev)) return prev;
+        if (requestedVersionId && protoItems.some((item) => item.id === requestedVersionId)) {
+          return requestedVersionId;
+        }
+        return protoItems[0]?.id || "";
+      });
 
       const docItems = docsRes.items || [];
       setDocs(docItems);
@@ -92,7 +98,7 @@ export const ProjectPreview: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [id, message]);
+  }, [id, message, requestedVersionId]);
 
   useEffect(() => {
     loadData();

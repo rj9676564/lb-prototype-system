@@ -12,7 +12,7 @@ import { useNavigate, useSearchParams } from "react-router";
 import { MarkdownView } from "../../components/MarkdownView";
 import { ProjectDocsTab } from "../../components/ProjectDocsTab";
 import { pb } from "../../lib/pocketbase";
-import { API_URL, BASE_URL } from "../../providers/constants";
+import { API_URL } from "../../providers/constants";
 import { DEFAULT_PROJECT_STATUS, projectStatusOptions, ProjectStatusTag } from "./status";
 
 type LatestPrototypeMeta = {
@@ -187,15 +187,8 @@ export const ProjectList = () => {
     window.open(record.url, "_blank", "noopener,noreferrer");
   };
 
-  const buildPreviewUrl = (url: string, updated?: string) => {
-    const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
-    const separator = fullUrl.includes("?") ? "&" : "?";
-    const version = updated ? encodeURIComponent(updated) : new Date().getTime().toString();
-    return `${fullUrl}${separator}v=${version}`;
-  };
-
-  const openPreview = (url: string, title: string, updated?: string) => {
-    setPreviewUrl(buildPreviewUrl(url, updated));
+  const openPreview = (projectId: string, title: string) => {
+    setPreviewUrl(`${window.location.origin}/rp_project/preview/${projectId}`);
     setDrawerTitle(title);
   };
 
@@ -368,9 +361,8 @@ export const ProjectList = () => {
                       style={{ padding: "0 6px" }}
                       onClick={() => {
                         openPreview(
-                          latestPrototype.url!,
+                          record.id,
                           `${record.name} - ${latestPrototype.title || "最新版本"}`,
-                          latestPrototype.updated,
                         );
                       }}
                     >

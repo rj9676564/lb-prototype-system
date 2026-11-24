@@ -51,7 +51,7 @@ import {
 } from "@ant-design/icons";
 import { useNavigate } from "react-router";
 import { pb } from "../../lib/pocketbase";
-import { API_URL, BASE_URL } from "../../providers/constants";
+import { API_URL } from "../../providers/constants";
 
 const { Title, Text, Paragraph } = Typography;
 
@@ -182,9 +182,9 @@ export const ProjectShow = () => {
   const latestVersion = versions[0];
   const selectedVersion = versions.find((v) => v.id === selectedVersionId) || latestVersion;
 
-  const openPreview = (url: string, title: string) => {
-    const fullUrl = url.startsWith("/") ? `${BASE_URL}${url}` : url;
-    setPreviewUrl(fullUrl);
+  const openPreview = (title: string, versionId?: string) => {
+    const query = versionId ? `?version=${encodeURIComponent(versionId)}` : "";
+    setPreviewUrl(`${window.location.origin}/rp_project/preview/${record?.id}${query}`);
     setDrawerTitle(title);
   };
 
@@ -401,8 +401,8 @@ export const ProjectShow = () => {
               icon={<GlobalOutlined />}
               onClick={() =>
                 openPreview(
-                  latestVersion.url,
                   `${record?.name} - ${latestVersion?.title || "最新版本"}`,
+                  latestVersion.id,
                 )
               }
             >
@@ -664,7 +664,7 @@ export const ProjectShow = () => {
                                       type="primary"
                                       ghost
                                       icon={<GlobalOutlined />}
-                                      onClick={() => openPreview(v.url, `${record?.name} - ${v.title}`)}
+                                      onClick={() => openPreview(`${record?.name} - ${v.title}`, v.id)}
                                     >
                                       预览此版本
                                     </Button>
@@ -746,8 +746,8 @@ export const ProjectShow = () => {
                         icon={<GlobalOutlined />}
                         onClick={() =>
                           openPreview(
-                            selectedVersion.url,
                             `${record?.name} - ${selectedVersion?.title}`,
+                            selectedVersion?.id,
                           )
                         }
                       >
@@ -803,7 +803,7 @@ export const ProjectShow = () => {
                       }}
                       onClick={() => {
                         if (item.url) {
-                          openPreview(item.url, `${record?.name} - ${item.title || "版本预览"}`);
+                          openPreview(`${record?.name} - ${item.title || "版本预览"}`, item.id);
                         }
                       }}
                     >
@@ -866,7 +866,7 @@ export const ProjectShow = () => {
                           icon={<GlobalOutlined />}
                           style={{ padding: "0 6px" }}
                           onClick={() =>
-                            openPreview(item.url, `${record?.name} - ${item.title || "版本预览"}`)
+                            openPreview(`${record?.name} - ${item.title || "版本预览"}`, item.id)
                           }
                         >
                           预览
